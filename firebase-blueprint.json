@@ -1,0 +1,97 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile with monthly budget goals and preferences",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "monthlyBudget": { "type": "number", "description": "Teto de orçamento global do mês" },
+        "activeMonth": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["userId"]
+    },
+    "BankAccount": {
+      "title": "BankAccount",
+      "description": "Bank account registered for user",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "name": { "type": "string" },
+        "institution": { "type": "string" },
+        "type": { "type": "string" },
+        "initialBalance": { "type": "number" },
+        "color": { "type": "string" },
+        "icon": { "type": "string" },
+        "purpose": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "userId", "name", "institution"]
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "Financial transaction for user",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "date": { "type": "string" },
+        "description": { "type": "string" },
+        "amount": { "type": "number" },
+        "type": { "type": "string" },
+        "category": { "type": "string" },
+        "subcategory": { "type": "string" },
+        "accountId": { "type": "string" },
+        "accountName": { "type": "string" },
+        "channel": { "type": "string" },
+        "bankInstitution": { "type": "string" },
+        "bank": { "type": "string" },
+        "isCategorizedByAI": { "type": "boolean" },
+        "aiConfidence": { "type": "number" },
+        "aiReason": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "userId", "date", "description", "amount", "type", "category"]
+    },
+    "BudgetGoal": {
+      "title": "BudgetGoal",
+      "description": "Category budget or savings goal",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "category": { "type": "string" },
+        "month": { "type": "string" },
+        "limit": { "type": "number" },
+        "targetAmount": { "type": "number" },
+        "currentAmount": { "type": "number" },
+        "title": { "type": "string" },
+        "deadline": { "type": "string" },
+        "isGoal": { "type": "boolean" }
+      },
+      "required": ["id", "userId"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "Stores user settings and monthly global budget"
+    },
+    "/users/{userId}/accounts/{accountId}": {
+      "schema": "BankAccount",
+      "description": "User bank accounts"
+    },
+    "/users/{userId}/transactions/{transactionId}": {
+      "schema": "Transaction",
+      "description": "User transactions"
+    },
+    "/users/{userId}/budgetGoals/{goalId}": {
+      "schema": "BudgetGoal",
+      "description": "User monthly budgets and financial goals"
+    }
+  }
+}

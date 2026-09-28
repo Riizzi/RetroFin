@@ -1,0 +1,48 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    background-color: #FAF7F2;
+    color: #292524;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .font-mono {
+    font-family: 'Space Mono', monospace, ui-monospace;
+  }
+
+  /* Paper ledger texture and subtle retro touches */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #F2EBE1;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #D5CBBC;
+    border-radius: 9999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #BAAE9D;
+  }
+}
+
+/* Retro tactile button & card styling */
+.retro-card {
+  background-color: #FFFDF9;
+  border: 1px solid #E8DFD1;
+  box-shadow: 2px 2px 0px #E5DCD0;
+}
+
+.retro-card-pressed {
+  box-shadow: 1px 1px 0px #E5DCD0;
+  transform: translate(1px, 1px);
+}
+
+.retro-stamp {
+  font-family: 'Space Mono', monospace;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}

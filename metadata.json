@@ -1,0 +1,8 @@
+{
+  "name": "InterGestão - Finanças & Banco Inter",
+  "description": "Aplicativo móvel de controle de gastos e finanças pessoais com integração ao Banco Inter (Open Finance API), categorização automática por IA e gestão mensal.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
