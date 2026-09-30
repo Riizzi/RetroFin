@@ -22,7 +22,8 @@ import {
   SecurityConfig,
 } from './utils/security';
 import { categorizeTransactionsWithAI, fetchAIInsights } from './services/categorizer';
-import { formatCurrencyBRL, formatMonthName } from './utils/formatters';
+import { formatCurrencyBRL, formatMonthName, getTransactionTimestamp } from './utils/formatters';
+import { cleanTransactionDescription } from './utils/ofxParser';
 import {
   loadLocalAccounts,
   saveLocalAccounts,
@@ -49,6 +50,10 @@ import {
   getUserTransactionsCollection,
   getUserBudgetGoalsCollection,
   getUserDocRef,
+  deleteTransactionFromCloud,
+  deleteAccountFromCloud,
+  deleteCategoryFromCloud,
+  clearCloudDatabase,
 } from './firebase';
 import { onSnapshot, getDoc } from 'firebase/firestore';
 import { User } from 'firebase/auth';
@@ -81,6 +86,7 @@ import {
   Fingerprint,
   Cloud,
   LogIn,
+  RefreshCw,
 } from 'lucide-react';
 
 export default function App() {
@@ -168,6 +174,7 @@ export default function App() {
 
     // Listen to Accounts
     let unsubAccounts = () => {};
+    let isInitialAccLoad = true;
     try {
       unsubAccounts = onSnapshot(
         getUserAccountsCollection(userId),
@@ -182,12 +189,18 @@ export default function App() {
               saveLocalAccounts(remoteAccounts);
             }
           } else {
-            // Remote has no accounts for this user yet - if local has accounts, upload them to cloud!
-            const currentLocal = loadLocalAccounts();
-            if (currentLocal.length > 0) {
-              syncAccountsToCloud(userId, currentLocal);
+            if (isInitialAccLoad) {
+              // Remote has no accounts for this user yet - if local has accounts, upload them to cloud!
+              const currentLocal = loadLocalAccounts();
+              if (currentLocal.length > 0) {
+                syncAccountsToCloud(userId, currentLocal);
+              }
+            } else {
+              setAccounts([]);
+              saveLocalAccounts([]);
             }
           }
+          isInitialAccLoad = false;
         },
         (error) => {
           console.warn('Firestore accounts listener error:', error);
@@ -199,26 +212,44 @@ export default function App() {
 
     // Listen to Transactions
     let unsubTx = () => {};
+    let isInitialTxLoad = true;
     try {
       unsubTx = onSnapshot(
         getUserTransactionsCollection(userId),
         (snapshot) => {
           if (!snapshot.empty) {
             const remoteTx: Transaction[] = [];
+            let needsUpdate = false;
             snapshot.forEach((doc) => {
-              remoteTx.push(doc.data() as Transaction);
+              const tx = doc.data() as Transaction;
+              const cleanedDesc = cleanTransactionDescription(tx.description);
+              if (cleanedDesc !== tx.description) {
+                needsUpdate = true;
+                tx.description = cleanedDesc;
+              }
+              remoteTx.push(tx);
             });
             if (remoteTx.length > 0) {
               setTransactions(remoteTx);
               saveLocalTransactions(remoteTx);
+              if (needsUpdate) {
+                console.log('[Migration] Automatically cleaning transaction descriptions in Firestore...');
+                syncTransactionsToCloud(userId, remoteTx);
+              }
             }
           } else {
-            // Remote has no transactions yet - if local has transactions, upload them to cloud!
-            const currentLocalTx = loadLocalTransactions();
-            if (currentLocalTx.length > 0) {
-              syncTransactionsToCloud(userId, currentLocalTx);
+            if (isInitialTxLoad) {
+              // Remote has no transactions yet - if local has transactions, upload them to cloud!
+              const currentLocalTx = loadLocalTransactions();
+              if (currentLocalTx.length > 0) {
+                syncTransactionsToCloud(userId, currentLocalTx);
+              }
+            } else {
+              setTransactions([]);
+              saveLocalTransactions([]);
             }
           }
+          isInitialTxLoad = false;
         },
         (error) => {
           console.warn('Firestore transactions listener error:', error);
@@ -295,6 +326,7 @@ export default function App() {
     },
   ]);
   const [isLoadingInsights, setIsLoadingInsights] = useState(false);
+  const [isManualRefreshing, setIsManualRefreshing] = useState(false);
 
   // Search & Filters in Transactions Tab
   const [searchQuery, setSearchQuery] = useState('');
@@ -332,9 +364,9 @@ export default function App() {
         return true;
       })
       .sort((a, b) => {
-        // Primary sort: Transaction Date (descending: newest transaction date first)
-        const dateDiff = new Date(b.date).getTime() - new Date(a.date).getTime();
-        if (dateDiff !== 0) return dateDiff;
+        // Primary sort: Date + Time descending (newest transaction first)
+        const tsDiff = getTransactionTimestamp(b) - getTransactionTimestamp(a);
+        if (tsDiff !== 0) return tsDiff;
         // Secondary sort: alphabetical description for deterministic order
         return a.description.localeCompare(b.description);
       });
@@ -398,8 +430,8 @@ export default function App() {
         return true;
       })
       .sort((a, b) => {
-        const timeA = new Date(a.date).getTime();
-        const timeB = new Date(b.date).getTime();
+        const timeA = getTransactionTimestamp(a);
+        const timeB = getTransactionTimestamp(b);
         if (dateSortOrder === 'desc') {
           const diff = timeB - timeA;
           return diff !== 0 ? diff : a.description.localeCompare(b.description);
@@ -487,6 +519,9 @@ export default function App() {
     if (selectedAccountFilter === accId) {
       setSelectedAccountFilter('ALL');
     }
+    if (currentUser) {
+      deleteAccountFromCloud(currentUser.uid, accId);
+    }
   };
 
   // Transaction Management Handlers
@@ -496,6 +531,9 @@ export default function App() {
 
   const handleDeleteTransaction = (id: string) => {
     setTransactions((prev) => prev.filter((t) => t.id !== id));
+    if (currentUser) {
+      deleteTransactionFromCloud(currentUser.uid, id);
+    }
   };
 
   const handleAddTransaction = (newTx: Transaction) => {
@@ -532,6 +570,9 @@ export default function App() {
 
   const handleDeleteCategory = (catId: string) => {
     setCategories((prev) => prev.filter((c) => c.id !== catId));
+    if (currentUser) {
+      deleteCategoryFromCloud(currentUser.uid, catId);
+    }
   };
 
   const handleResetDefaultCategories = () => {
@@ -544,6 +585,9 @@ export default function App() {
     setAccounts([]);
     setTransactions([]);
     setSelectedAccountFilter('ALL');
+    if (currentUser) {
+      clearCloudDatabase(currentUser.uid);
+    }
   };
 
   // Load sample demo data
@@ -580,16 +624,16 @@ export default function App() {
       <OfflineIndicator />
 
       {/* Top Header / Retro App Bar */}
-      <header className="sticky top-0 z-40 bg-[#FAF7F2]/95 backdrop-blur-md border-b border-[#E8DFD1] px-3 sm:px-8 py-2 sm:py-2.5">
-        <div className="max-w-6xl mx-auto flex items-center justify-between gap-2">
+      <header className="sticky top-0 z-40 bg-[#FAF7F2]/95 backdrop-blur-md border-b border-[#E8DFD1] px-2 sm:px-8 py-1.5 sm:py-2.5">
+        <div className="max-w-6xl mx-auto flex items-center justify-between gap-1.5 sm:gap-2">
           {/* Logo & Identity */}
-          <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
-            <div className="w-8 h-8 rounded-xl bg-[#292524] flex items-center justify-center text-[#FAF7F2] shadow-[1px_1px_0px_#C68B59] shrink-0 border border-[#292524]">
-              <Banknote className="w-4 h-4 text-[#C68B59]" />
+          <div className="flex items-center gap-1.5 sm:gap-2.5 min-w-0 shrink-0">
+            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg sm:rounded-xl bg-[#292524] flex items-center justify-center text-[#FAF7F2] shadow-[1px_1px_0px_#C68B59] shrink-0 border border-[#292524]">
+              <Banknote className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#C68B59]" />
             </div>
             <div className="min-w-0">
-              <div className="flex items-center gap-1.5">
-                <h1 className="font-extrabold text-sm sm:text-base tracking-tight text-[#292524] truncate">
+              <div className="flex items-center gap-1 sm:gap-1.5">
+                <h1 className="font-extrabold text-xs sm:text-base tracking-tight text-[#292524] hidden min-[360px]:inline-block truncate">
                   RetroFin
                 </h1>
                 <button
@@ -600,13 +644,13 @@ export default function App() {
                       ? `Conectado como ${currentUser.email}. Clique para gerenciar.`
                       : 'Clique para sincronizar com sua Conta Google no PC e Celular'
                   }
-                  className="text-[10px] font-mono px-1.5 py-0.5 rounded-lg bg-[#EDF5EF] hover:bg-[#E2EDE5] text-[#386641] border border-[#CDDACF] font-bold shrink-0 flex items-center gap-1 transition active:scale-95 cursor-pointer max-w-[110px] sm:max-w-none"
+                  className="text-[9px] sm:text-[10px] font-mono px-1 py-0.5 rounded-md sm:rounded-lg bg-[#EDF5EF] hover:bg-[#E2EDE5] text-[#386641] border border-[#CDDACF] font-bold shrink-0 flex items-center gap-1 transition active:scale-95 cursor-pointer max-w-[80px] min-[400px]:max-w-[120px] sm:max-w-none truncate"
                 >
                   <span className="w-1.5 h-1.5 rounded-full bg-[#4A7C59] animate-pulse shrink-0" />
                   <span className="truncate">
                     {currentUser && !currentUser.isAnonymous && currentUser.email
                       ? currentUser.email.split('@')[0]
-                      : 'Sincronizar'}
+                      : 'Nuvem'}
                   </span>
                 </button>
               </div>
@@ -614,13 +658,42 @@ export default function App() {
           </div>
 
           {/* Quick Actions */}
-          <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
+          <div className="flex items-center gap-1 sm:gap-1.5 shrink-0 ml-auto">
             {/* Accounts count badge */}
             <span className="hidden sm:inline-block text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#F2EBE1] text-[#78716C] border border-[#E5DDD0] font-bold shrink-0">
               {accounts.length > 0
                 ? `${accounts.length} Conta${accounts.length > 1 ? 's' : ''}`
                 : 'Base Local'}
             </span>
+
+            {/* Manual Refresh & Updates Button */}
+            <button
+              onClick={async () => {
+                setIsManualRefreshing(true);
+                if ('serviceWorker' in navigator) {
+                  try {
+                    const registrations = await navigator.serviceWorker.getRegistrations();
+                    for (const reg of registrations) {
+                      await reg.update();
+                    }
+                  } catch (e) {
+                    console.warn('SW update check failed:', e);
+                  }
+                }
+                try {
+                  await handleRefreshInsights();
+                } catch (e) {}
+                
+                setTimeout(() => {
+                  setIsManualRefreshing(false);
+                  window.location.reload();
+                }, 800);
+              }}
+              title="Buscar novas atualizações e sincronizar"
+              className="p-1.5 sm:p-2 rounded-xl bg-[#FFFDF9] border border-[#E8DFD1] text-[#78716C] hover:text-[#C68B59] hover:bg-[#FDFBF7] transition shadow-[1px_1px_0px_#E5DCD0]"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${isManualRefreshing ? 'animate-spin text-[#C68B59]' : ''}`} />
+            </button>
 
             {/* Security / Vault Status Button */}
             <button
@@ -637,11 +710,11 @@ export default function App() {
               }`}
             >
               {securityConfig.biometricsEnabled ? (
-                <Fingerprint className="w-4 h-4 text-[#386641]" />
+                <Fingerprint className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#386641]" />
               ) : securityConfig.pinEnabled ? (
-                <Lock className="w-4 h-4 text-[#386641]" />
+                <Lock className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#386641]" />
               ) : (
-                <Shield className="w-4 h-4" />
+                <Shield className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
               )}
               <span className="text-[11px] font-mono font-bold hidden md:inline">
                 {securityConfig.pinEnabled ? 'Protegido' : 'Segurança'}
@@ -658,7 +731,7 @@ export default function App() {
                 title="Bloquear aplicativo agora"
                 className="p-1.5 sm:p-2 rounded-xl bg-[#FFFDF9] border border-[#E8DFD1] text-[#78716C] hover:text-[#C85A5A] hover:bg-[#FAF0F0] hover:border-[#E8C0C0] transition shadow-[1px_1px_0px_#E5DCD0]"
               >
-                <Lock className="w-4 h-4" />
+                <Lock className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
               </button>
             )}
 
@@ -668,7 +741,7 @@ export default function App() {
               title={hideBalances ? 'Mostrar valores' : 'Ocultar valores'}
               className="p-1.5 sm:p-2 rounded-xl bg-[#FFFDF9] border border-[#E8DFD1] text-[#78716C] hover:text-[#292524] hover:bg-[#F2EBE1] transition shadow-[1px_1px_0px_#E5DCD0]"
             >
-              {hideBalances ? <EyeOff className="w-4 h-4 text-[#C85A5A]" /> : <Eye className="w-4 h-4" />}
+              {hideBalances ? <EyeOff className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#C85A5A]" /> : <Eye className="w-3.5 h-3.5 sm:w-4 sm:h-4" />}
             </button>
           </div>
         </div>
@@ -677,9 +750,9 @@ export default function App() {
       {/* Modern Filter & Controls Strip */}
       <div className="bg-[#FFFDF9] border-b border-[#E8DFD1] px-3 sm:px-8 py-2">
         <div className="max-w-6xl mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-          {/* Month Selector & AI Button */}
+          {/* Month Selector */}
           <div className="flex items-center justify-between gap-2 w-full sm:w-auto">
-            <div className="flex items-center gap-1 bg-[#F2EBE1] border border-[#E5DDD0] rounded-xl px-1.5 py-0.5 sm:py-1">
+            <div className="flex items-center gap-1 bg-[#F2EBE1] border border-[#E5DDD0] rounded-xl px-1.5 py-0.5 sm:py-1 w-full sm:w-auto justify-between sm:justify-start">
               <button
                 onClick={handlePrevMonth}
                 disabled={availableMonths.indexOf(selectedMonth) >= availableMonths.length - 1}
@@ -702,21 +775,6 @@ export default function App() {
                 <ChevronRight className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
               </button>
             </div>
-
-            {/* AI Action button */}
-            <button
-              onClick={handleCategorizeMonthWithAI}
-              disabled={isBatchCategorizing}
-              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-xl bg-[#FAF5ED] hover:bg-[#F3E5D3] border border-[#F3E5D3] text-[11px] sm:text-xs font-mono font-bold text-[#C68B59] transition active:scale-95 disabled:opacity-50 shrink-0 shadow-xs"
-            >
-              <Sparkles className={`w-3.5 h-3.5 ${isBatchCategorizing ? 'animate-spin' : ''}`} />
-              <span>{isBatchCategorizing ? 'Classificando...' : 'Classificar IA'}</span>
-              {unclassifiedCount > 0 && (
-                <span className="px-1.5 py-0.2 rounded-full bg-[#C68B59] text-white text-[9px] sm:text-[10px] font-mono">
-                  {unclassifiedCount}
-                </span>
-              )}
-            </button>
           </div>
 
           {/* Bank Filter Pills & "+" Button */}
@@ -1188,6 +1246,7 @@ export default function App() {
         {/* TAB 5: AUTOMATION & IMPORT */}
         {activeTab === 'automation' && (
           <AutomationHub
+            userId={currentUser?.uid}
             accounts={accounts}
             categories={categories}
             transactions={transactions}
@@ -1290,6 +1349,7 @@ export default function App() {
         isOpen={isNewTxModalOpen}
         categories={categories}
         accounts={accounts}
+        allTransactions={transactions}
         onClose={() => setIsNewTxModalOpen(false)}
         onAdd={handleAddTransaction}
         onOpenNewAccountModal={() => {

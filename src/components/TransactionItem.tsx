@@ -2,7 +2,7 @@ import React from 'react';
 import { Transaction, Category } from '../types';
 import { CategoryIcon } from './CategoryIcon';
 import { BankBadge } from './BankBadge';
-import { formatCurrencyBRL, formatDateBR } from '../utils/formatters';
+import { formatCurrencyBRL, formatDateBR, formatTransactionTime } from '../utils/formatters';
 import { Sparkles, Trash2 } from 'lucide-react';
 
 interface Props {
@@ -35,6 +35,7 @@ export const TransactionItem: React.FC<Props> = ({
   };
 
   const channelText = channelLabels[transaction.channel] || 'Outro';
+  const txTime = formatTransactionTime(transaction);
 
   return (
     <div
@@ -61,6 +62,7 @@ export const TransactionItem: React.FC<Props> = ({
           <div className="flex flex-wrap items-center gap-1 sm:gap-1.5 mt-0.5 text-xs">
             <span className="text-[#78716C] text-[10px] sm:text-[11px] font-mono">
               {formatDateBR(transaction.date)}
+              {txTime && <span className="text-[#A8A29E] font-medium ml-1">{txTime}</span>}
             </span>
             <span className="text-[#D5CBBC]">•</span>
             <span className="text-[#57534E] text-[10px] sm:text-[11px] font-medium truncate max-w-[120px] sm:max-w-none">

@@ -425,12 +425,12 @@ export const AnalyticsCharts: React.FC<Props> = ({
           </div>
 
           {/* Quick Metrics KPI Cards */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-4">
+          <div className="grid grid-cols-1 min-col-size-[140px] min-[400px]:grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-4">
             <div className="p-3 sm:p-4 rounded-xl sm:rounded-2xl bg-[#FFFDF9] border border-[#E8DFD1] shadow-[1px_1px_0px_#E5DCD0]">
               <span className="text-[9px] sm:text-[10px] font-mono uppercase tracking-wider text-[#78716C] font-bold block truncate">
                 Recebido ({multiMonthData.length}M)
               </span>
-              <div className="text-base sm:text-2xl font-mono font-extrabold text-[#386641] mt-0.5 truncate">
+              <div className="text-sm xs:text-base sm:text-2xl font-mono font-extrabold text-[#386641] mt-0.5">
                 {formatCurrencyBRL(totalHistoricalIncome)}
               </div>
               <span className="text-[10px] sm:text-[11px] font-mono text-[#78716C] block truncate">
@@ -442,7 +442,7 @@ export const AnalyticsCharts: React.FC<Props> = ({
               <span className="text-[9px] sm:text-[10px] font-mono uppercase tracking-wider text-[#78716C] font-bold block truncate">
                 Gasto ({multiMonthData.length}M)
               </span>
-              <div className="text-base sm:text-2xl font-mono font-extrabold text-[#C85A5A] mt-0.5 truncate">
+              <div className="text-sm xs:text-base sm:text-2xl font-mono font-extrabold text-[#C85A5A] mt-0.5">
                 {formatCurrencyBRL(totalHistoricalExpense)}
               </div>
               <span className="text-[10px] sm:text-[11px] font-mono text-[#78716C] block truncate">
@@ -455,7 +455,7 @@ export const AnalyticsCharts: React.FC<Props> = ({
                 Resultado Líquido
               </span>
               <div
-                className={`text-base sm:text-2xl font-mono font-extrabold mt-0.5 truncate ${
+                className={`text-sm xs:text-base sm:text-2xl font-mono font-extrabold mt-0.5 ${
                   totalHistoricalBalance >= 0 ? 'text-[#386641]' : 'text-[#C85A5A]'
                 }`}
               >
@@ -483,7 +483,7 @@ export const AnalyticsCharts: React.FC<Props> = ({
                   </button>
                 )}
               </div>
-              <div className="text-base sm:text-lg font-mono font-extrabold text-[#292524] mt-0.5 truncate">
+              <div className="text-sm xs:text-base sm:text-lg font-mono font-extrabold text-[#292524] mt-0.5 truncate">
                 {activeHighlighted?.month || currentMonth}
               </div>
               <div className="text-[10px] sm:text-xs font-mono text-[#78716C] flex items-center justify-between mt-0.5">
@@ -765,42 +765,44 @@ export const AnalyticsCharts: React.FC<Props> = ({
                           : 'bg-[#FAF7F2] border-[#E8DFD1] hover:border-[#D5CBBC]'
                       }`}
                     >
-                      <div className="flex items-center justify-between gap-2">
+                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                         {/* Month Identification */}
-                        <div className="flex items-center gap-1.5 min-w-0">
+                        <div className="flex items-center justify-between sm:justify-start gap-1.5 min-w-0">
                           <span className="font-mono font-bold text-xs sm:text-sm text-[#292524] truncate">
                             {formatMonthName(d.month)}
                           </span>
-                          {isCurrent && (
-                            <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-[#292524] text-[#FAF7F2] font-bold shrink-0">
-                              Atual
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            {isCurrent && (
+                              <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-[#292524] text-[#FAF7F2] font-bold shrink-0">
+                                Mês Ativo
+                              </span>
+                            )}
+                            <span className="text-[9px] font-mono text-[#78716C] bg-stone-200/50 px-1 py-0.2 rounded shrink-0">
+                              {d.count} txs
                             </span>
-                          )}
-                          <span className="text-[10px] font-mono text-[#78716C] shrink-0 hidden sm:inline">
-                            ({d.count} txs)
-                          </span>
+                          </div>
                         </div>
 
                         {/* Values summary */}
-                        <div className="flex items-center gap-3 sm:gap-6 font-mono text-xs shrink-0">
-                          <div className="text-right">
-                            <span className="text-[9px] text-[#78716C] block leading-tight">Receitas</span>
-                            <span className="font-bold text-[11px] sm:text-xs text-[#386641]">
-                              +{formatCurrencyBRL(d.income)}
+                        <div className="grid grid-cols-3 sm:flex sm:items-center gap-1 sm:gap-6 font-mono text-xs w-full sm:w-auto">
+                          <div className="text-left sm:text-right">
+                            <span className="text-[9px] text-[#78716C] block leading-tight">Receitas (+)</span>
+                            <span className="font-bold text-[10px] sm:text-xs text-[#386641] block sm:inline">
+                              {formatCurrencyBRL(d.income)}
                             </span>
                           </div>
 
-                          <div className="text-right">
-                            <span className="text-[9px] text-[#78716C] block leading-tight">Despesas</span>
-                            <span className="font-bold text-[11px] sm:text-xs text-[#C85A5A]">
-                              -{formatCurrencyBRL(d.expense)}
+                          <div className="text-left sm:text-right">
+                            <span className="text-[9px] text-[#78716C] block leading-tight">Despesas (-)</span>
+                            <span className="font-bold text-[10px] sm:text-xs text-[#C85A5A] block sm:inline">
+                              {formatCurrencyBRL(d.expense)}
                             </span>
                           </div>
 
-                          <div className="text-right min-w-[70px]">
+                          <div className="text-right sm:min-w-[70px]">
                             <span className="text-[9px] text-[#78716C] block leading-tight">Saldo</span>
                             <span
-                              className={`font-bold text-[11px] sm:text-xs ${
+                              className={`font-bold text-[10px] sm:text-xs block sm:inline ${
                                 d.balance >= 0 ? 'text-[#386641]' : 'text-[#C85A5A]'
                               }`}
                             >
@@ -808,8 +810,6 @@ export const AnalyticsCharts: React.FC<Props> = ({
                               {formatCurrencyBRL(d.balance)}
                             </span>
                           </div>
-
-                          <ChevronRight className="w-4 h-4 text-[#A8A29E] shrink-0" />
                         </div>
                       </div>
 

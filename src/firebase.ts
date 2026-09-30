@@ -8,6 +8,8 @@ import {
   onSnapshot,
   writeBatch,
   query,
+  deleteDoc,
+  getDocs,
 } from 'firebase/firestore';
 import {
   getAuth,
@@ -143,5 +145,65 @@ export async function saveGlobalMonthlyBudget(userId: string, budget: number, mo
     }, { merge: true });
   } catch (err) {
     console.warn('Failed to save monthly budget:', err);
+  }
+}
+
+// Delete transaction from Firestore
+export async function deleteTransactionFromCloud(userId: string, txId: string) {
+  try {
+    const ref = doc(db, 'users', userId, 'transactions', txId);
+    await deleteDoc(ref);
+  } catch (err) {
+    console.warn('Failed to delete transaction from cloud:', err);
+  }
+}
+
+// Delete account from Firestore
+export async function deleteAccountFromCloud(userId: string, accId: string) {
+  try {
+    const ref = doc(db, 'users', userId, 'accounts', accId);
+    await deleteDoc(ref);
+  } catch (err) {
+    console.warn('Failed to delete account from cloud:', err);
+  }
+}
+
+// Delete category from Firestore
+export async function deleteCategoryFromCloud(userId: string, catId: string) {
+  try {
+    const ref = doc(db, 'users', userId, 'budgetGoals', catId);
+    await deleteDoc(ref);
+  } catch (err) {
+    console.warn('Failed to delete category from cloud:', err);
+  }
+}
+
+// Clear all user collections in Firestore (for reset)
+export async function clearCloudDatabase(userId: string) {
+  try {
+    const batch = writeBatch(db);
+    
+    // Fetch and delete accounts
+    const accountsSnap = await getDocs(getUserAccountsCollection(userId));
+    accountsSnap.forEach((docSnap) => {
+      batch.delete(docSnap.ref);
+    });
+
+    // Fetch and delete transactions
+    const txSnap = await getDocs(getUserTransactionsCollection(userId));
+    txSnap.forEach((docSnap) => {
+      batch.delete(docSnap.ref);
+    });
+
+    // Fetch and delete budget goals (categories)
+    const budgetSnap = await getDocs(getUserBudgetGoalsCollection(userId));
+    budgetSnap.forEach((docSnap) => {
+      batch.delete(docSnap.ref);
+    });
+
+    await batch.commit();
+    console.log('[Firestore] Cloud database cleared for user:', userId);
+  } catch (err) {
+    console.warn('Failed to clear cloud database:', err);
   }
 }

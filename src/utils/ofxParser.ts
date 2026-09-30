@@ -1,5 +1,59 @@
 import { Transaction, PaymentChannel, BankInstitution, BankAccount } from '../types';
 
+export function cleanTransactionDescription(rawText: string): string {
+  let desc = rawText;
+
+  // 0. Strip unreplaced Macrodroid variable brackets/placeholders
+  desc = desc.replace(/\[notification_title\]/gi, '');
+  desc = desc.replace(/\[notif_title\]/gi, '');
+  desc = desc.replace(/\[notification_text\]/gi, '');
+  desc = desc.replace(/\[notif_text\]/gi, '');
+  desc = desc.replace(/\[notif_app_name\]/gi, '');
+
+  // 1. Remove BRL values (e.g. "R$ 42,00", "42.00")
+  desc = desc.replace(/(?:R\$\s*)?\d{1,4}(?:\.\d{3})*,\d{2}/gi, '');
+  desc = desc.replace(/(?:R\$\s*)?\d+\.\d{2}/gi, '');
+
+  // 2. Clean typical prefixes and boilerplate phrases (case-insensitive)
+  desc = desc.replace(/compra\s+no\s+débito\s*:?/gi, '');
+  desc = desc.replace(/compra\s+no\s+crédito\s*:?/gi, '');
+  desc = desc.replace(/compra\s+aprovada\s*:?/gi, '');
+  desc = desc.replace(/você\s+pagou/gi, '');
+  desc = desc.replace(/transferência\s+enviada/gi, '');
+  desc = desc.replace(/transferência/gi, '');
+  desc = desc.replace(/pix\s+enviado\s+para/gi, '');
+  desc = desc.replace(/pix\s+recebido\s+de/gi, '');
+  desc = desc.replace(/pix\s+recebidos\s+de/gi, '');
+  desc = desc.replace(/no\s+cartão/gi, '');
+  desc = desc.replace(/de\s+R\$\s*/gi, '');
+
+  // 3. Remove "No estabelecimento", "no estabelecimento", "estabelecimento"
+  desc = desc.replace(/no\s+estabelecimento\s*/gi, '');
+  desc = desc.replace(/No\s+estabelecimento\s*/gi, '');
+  desc = desc.replace(/estabelecimento\s*/gi, '');
+
+  // 4. Remove bank qualifiers and card endings
+  desc = desc.replace(/com\s+o\s+cartão\s+\w+/gi, '');
+  desc = desc.replace(/com\s+o\s+cartão/gi, '');
+  desc = desc.replace(/no\s+Nubank/gi, '');
+  desc = desc.replace(/no\s+Inter/gi, '');
+  desc = desc.replace(/com\s+o\s+Nubank/gi, '');
+  desc = desc.replace(/com\s+o\s+Inter/gi, '');
+
+  // 5. Clean symbols, brackets, and quotes
+  desc = desc.replace(/[\(\)•\-\:"']/g, ' ');
+
+  // 6. Trim and collapse multiple spaces
+  desc = desc.replace(/\s+/g, ' ').trim();
+
+  // 7. Capitalize first letter
+  if (desc) {
+    desc = desc.charAt(0).toUpperCase() + desc.slice(1);
+  }
+
+  return desc;
+}
+
 // Robust monetary string parser handling Brazilian format (1.234,56), standard format (1234.56), and currency symbols
 export function parseMonetaryValue(raw: string | number): number {
   if (typeof raw === 'number') return isNaN(raw) ? 0 : raw;
@@ -250,11 +304,19 @@ export function parseBankOFX(
 
       const rawDt = dtMatch[1].trim();
       let formattedDate = new Date().toISOString().split('T')[0];
+      let formattedTime: string | undefined = undefined;
       if (rawDt.length >= 8) {
         const year = rawDt.substring(0, 4);
         const month = rawDt.substring(4, 6);
         const day = rawDt.substring(6, 8);
         formattedDate = `${year}-${month}-${day}`;
+        if (rawDt.length >= 12) {
+          const hh = rawDt.substring(8, 10);
+          const mm = rawDt.substring(10, 12);
+          if (!isNaN(Number(hh)) && !isNaN(Number(mm))) {
+            formattedTime = `${hh}:${mm}`;
+          }
+        }
       }
 
       const description = (memoMatch ? memoMatch[1].trim() : '') || (nameMatch ? nameMatch[1].trim() : '') || 'Movimentação Bancária';
@@ -268,6 +330,8 @@ export function parseBankOFX(
       transactions.push({
         id: idMatch ? `ofx-${idMatch[1].trim()}` : `ofx-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
         date: formattedDate,
+        time: formattedTime,
+        createdAt: formattedTime ? `${formattedDate}T${formattedTime}:00` : undefined,
         description,
         amount: rawAmt,
         type,
@@ -404,14 +468,15 @@ export function parseRawBankText(
     const parsedVal = parseFloat(valStr);
     if (isNaN(parsedVal)) continue;
 
-    const isCredit = /receb|depósito|crédito em conta|reembolso|salário|estorno/i.test(line);
+    const isDebit = (
+      /compra|pagou|enviado|saída|saida|débito|debito/i.test(line) ||
+      (/enviou/i.test(line) && !/te\s+enviou/i.test(line))
+    );
+    const isCreditCheck = /receb|depósito|deposito|crédito em conta|reembolso|salário|salario|estorno|te enviou|recebeu|recebido|creditado/i.test(line);
+    const isCredit = isCreditCheck && !isDebit;
     const amount = isCredit ? Math.abs(parsedVal) : -Math.abs(parsedVal);
 
-    let desc = line
-      .replace(/(?:R\$\s*)?\d{1,4}(?:\.\d{3})*,\d{2}/gi, '')
-      .replace(/você pagou|compra aprovada|transferência|pix enviado para|no cartão/gi, '')
-      .replace(/[\(\)•\-]/g, ' ')
-      .trim();
+    let desc = cleanTransactionDescription(line);
 
     if (!desc || desc.length < 3) {
       desc = `Lançamento ${line.slice(0, 30)}`;
@@ -423,9 +488,12 @@ export function parseRawBankText(
     const accId = targetAccount?.id || `acc-${inst.toLowerCase()}`;
     const accName = targetAccount?.name || 'Conta Padrão';
 
+    const now = new Date();
     transactions.push({
       id: `clip-${Date.now()}-${i}-${Math.random().toString(36).substring(2, 6)}`,
-      date: new Date().toISOString().split('T')[0],
+      date: now.toISOString().split('T')[0],
+      time: now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+      createdAt: now.toISOString(),
       description: desc,
       amount,
       type,

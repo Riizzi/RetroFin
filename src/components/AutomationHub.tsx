@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 
 interface Props {
+  userId?: string;
   accounts: BankAccount[];
   categories: Category[];
   transactions: Transaction[];
@@ -44,6 +45,7 @@ interface Props {
 }
 
 export const AutomationHub: React.FC<Props> = ({
+  userId,
   accounts,
   categories,
   transactions,
@@ -76,7 +78,15 @@ export const AutomationHub: React.FC<Props> = ({
 
   // App URL for mobile install (Android / iOS):
   // Support Published custom domain (https://retrofin.ai.studio), Active Dev, and Published cloud run link
-  const [urlMode, setUrlMode] = useState<'custom' | 'dev' | 'cloudrun'>('custom');
+  const [urlMode, setUrlMode] = useState<'custom' | 'dev' | 'cloudrun'>(() => {
+    if (typeof window !== 'undefined') {
+      const origin = window.location.origin;
+      if (origin.includes('retrofin.ai.studio')) return 'custom';
+      if (origin.includes('-dev-') || origin.includes('localhost') || origin.includes('127.0.0.1') || origin.includes(':3000')) return 'dev';
+      if (origin.includes('-pre-') || origin.includes('.run.app')) return 'cloudrun';
+    }
+    return 'custom';
+  });
 
   const customDomainUrl = 'https://retrofin.ai.studio';
   const liveOrigin = typeof window !== 'undefined' ? window.location.origin : '';
@@ -93,7 +103,10 @@ export const AutomationHub: React.FC<Props> = ({
       : urlMode === 'dev'
       ? devUrl
       : cloudRunPublishedUrl;
-  const webhookUrl = `${currentAppUrl}/api/notifications/webhook`;
+  const baseWebhookUrl = `${currentAppUrl}/api/notifications/webhook`;
+  const webhookUrl = userId
+    ? `${baseWebhookUrl}?userId=${userId}`
+    : baseWebhookUrl;
 
   // Generate QR Code for mobile camera scanning
   useEffect(() => {
@@ -879,6 +892,33 @@ export const AutomationHub: React.FC<Props> = ({
                 <Copy className="w-3.5 h-3.5" />
                 <span>{copiedScript ? 'Copiado!' : 'Copiar URL'}</span>
               </button>
+            </div>
+
+            {userId ? (
+              <p className="text-[11px] text-[#386641] font-mono leading-relaxed bg-[#EDF5EF] p-2.5 rounded-lg border border-[#CDDACF] mt-2">
+                ✨ <strong>Modo Persistente Ativo!</strong> Esta URL já contém o seu identificador seguro. Com ele, o servidor grava as notificações <strong>diretamente no seu banco de dados Firestore</strong> em tempo real, sem depender de o aplicativo estar aberto ou de ficar na aba "Automação"!
+              </p>
+            ) : (
+              <p className="text-[11px] text-[#C68B59] font-mono leading-relaxed bg-[#FAF5ED] p-2.5 rounded-lg border border-[#F3E5D3] mt-2">
+                ⚠️ <strong>Aviso:</strong> Faça login com o Google para habilitar o <strong>Modo Persistente</strong>. Sem ele, as notificações recebidas ficarão apenas na memória temporária do servidor e serão perdidas se o app for fechado.
+              </p>
+            )}
+
+            {/* CRITICAL WARNING ABOUT GOOGLE REDIRECT WRAPPING */}
+            <div className="p-3 rounded-lg bg-[#FAF0F0] border border-[#E8C4C4] text-[#C85A5A] text-[11px] leading-relaxed space-y-1.5 mt-2">
+              <p className="font-bold flex items-center gap-1.5 text-xs">
+                <AlertTriangle className="w-4 h-4 shrink-0 text-[#C85A5A]" />
+                CUIDADO COM LINKS REDIRECIONADOS DO GOOGLE (MUITO IMPORTANTE!)
+              </p>
+              <p>
+                Nas capturas de tela do seu celular, percebemos que o MacroDroid está chamando uma URL do tipo <code>https://www.google.com/url?sa=E&q=...</code>.
+              </p>
+              <p>
+                <strong>Isso impede o funcionamento do webhook!</strong> O Google bloqueia o envio de dados via POST através de links de redirecionamento dele.
+              </p>
+              <p>
+                Cole exatamente a URL limpa copiada acima (iniciando em <code>https://ais-dev-...</code> ou <code>https://ais-pre-...</code>) diretamente na configuração de Requisição HTTP do seu MacroDroid.
+              </p>
             </div>
           </div>
 

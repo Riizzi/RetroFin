@@ -41,6 +41,8 @@ export interface BankAccount {
 export interface Transaction {
   id: string;
   date: string; // YYYY-MM-DD
+  time?: string; // HH:mm or HH:mm:ss
+  createdAt?: string; // ISO string
   description: string;
   amount: number; // positive for income, negative for expense
   type: TransactionType;

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Transaction, Category, PaymentChannel, BankAccount } from '../types';
 import { CategoryIcon } from './CategoryIcon';
 import { BankBadge } from './BankBadge';
-import { formatCurrencyBRL, formatDateBR } from '../utils/formatters';
+import { formatCurrencyBRL, formatDateBR, formatTransactionTime } from '../utils/formatters';
 import { X, Sparkles, Trash2, Check, FileText } from 'lucide-react';
 import { ConfirmationModal } from './ConfirmationModal';
 
@@ -147,7 +147,8 @@ export const TransactionModal: React.FC<Props> = ({
               </div>
               <p className="text-xs text-[#292524] mt-1 font-bold">{transaction.description}</p>
               <p className="text-[11px] text-[#78716C] font-mono mt-0.5">
-                {formatDateBR(transaction.date)} • {activeAccount?.name || transaction.accountName || transaction.account}
+                {formatDateBR(transaction.date)}
+                {formatTransactionTime(transaction) && ` às ${formatTransactionTime(transaction)}`} • {activeAccount?.name || transaction.accountName || transaction.account}
               </p>
             </div>
 

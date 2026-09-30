@@ -2,11 +2,13 @@ import React, { useState } from 'react';
 import { Transaction, Category, PaymentChannel, TransactionType, BankAccount } from '../types';
 import { X, Plus, Sparkles, Landmark } from 'lucide-react';
 import { classifyTransactionLocally } from '../utils/ofxParser';
+import { categorizeTransactionsWithAI } from '../services/categorizer';
 
 interface Props {
   isOpen: boolean;
   categories: Category[];
   accounts: BankAccount[];
+  allTransactions?: Transaction[];
   onClose: () => void;
   onAdd: (t: Transaction) => void;
   onOpenNewAccountModal?: () => void;
@@ -16,6 +18,7 @@ export const NewTransactionModal: React.FC<Props> = ({
   isOpen,
   categories,
   accounts,
+  allTransactions = [],
   onClose,
   onAdd,
   onOpenNewAccountModal,
@@ -32,6 +35,7 @@ export const NewTransactionModal: React.FC<Props> = ({
   const [category, setCategory] = useState(categories[0]?.id || 'alimentacao');
   const [subcategory, setSubcategory] = useState('');
   const [channel, setChannel] = useState<PaymentChannel>('PIX');
+  const [isCategorizingByAI, setIsCategorizingByAI] = useState(false);
 
   const selectedAccount = accounts.find((a) => a.id === selectedAccountId);
 
@@ -44,6 +48,48 @@ export const NewTransactionModal: React.FC<Props> = ({
         setSubcategory(auto.subcategory);
         setChannel(auto.channel);
       }
+    }
+  };
+
+  const handleAICategorize = async () => {
+    if (!description.trim()) return;
+    setIsCategorizingByAI(true);
+    try {
+      const parsedAmount = parseFloat(amountStr.replace(',', '.')) || 0;
+      const finalAmount = type === 'debit' ? -Math.abs(parsedAmount) : Math.abs(parsedAmount);
+
+      const tempTx: Transaction = {
+        id: 'temp-manual',
+        date,
+        description: description.trim(),
+        amount: finalAmount,
+        type,
+        category: 'outros',
+        channel,
+        accountId: selectedAccountId,
+        accountName: selectedAccount?.name || '',
+        bankInstitution: selectedAccount?.institution || undefined,
+        isCategorizedByAI: false,
+        status: 'liquidado',
+      };
+
+      // Get high-quality manual classifications from the existing list
+      const manualExamples = allTransactions.filter(
+        (t) => t.category && t.category !== 'outros' && !t.isCategorizedByAI
+      );
+
+      const result = await categorizeTransactionsWithAI([tempTx], accounts, manualExamples);
+      if (result.updated && result.updated.length > 0) {
+        const classified = result.updated[0];
+        setCategory(classified.category);
+        if (classified.subcategory) {
+          setSubcategory(classified.subcategory);
+        }
+      }
+    } catch (err) {
+      console.warn('AI categorization failed:', err);
+    } finally {
+      setIsCategorizingByAI(false);
     }
   };
 
@@ -64,9 +110,14 @@ export const NewTransactionModal: React.FC<Props> = ({
     const accName = selectedAccount?.name || 'Conta Padrão';
     const accInstitution = selectedAccount?.institution || 'OUTRO';
 
+    const now = new Date();
+    const currentTime = now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+
     const newTx: Transaction = {
       id: `manual-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       date,
+      time: currentTime,
+      createdAt: now.toISOString(),
       description: description.trim(),
       amount: finalAmount,
       type,
@@ -251,6 +302,17 @@ export const NewTransactionModal: React.FC<Props> = ({
               placeholder="Ex: Mercado Carrefour, Conta Enel, Salário..."
               className="w-full rounded-xl bg-[#FAF7F2] border border-[#E8DFD1] px-3.5 py-2 text-xs sm:text-sm text-[#292524] focus:outline-none focus:border-[#292524] placeholder:text-[#A8A29E]"
             />
+            {description.trim().length > 2 && (
+              <button
+                type="button"
+                onClick={handleAICategorize}
+                disabled={isCategorizingByAI}
+                className="mt-1.5 w-full flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg bg-[#FAF5ED] hover:bg-[#F3E5D3] border border-[#F3E5D3] text-[11px] font-mono font-bold text-[#C68B59] transition disabled:opacity-60 cursor-pointer active:scale-95"
+              >
+                <Sparkles className={`w-3.5 h-3.5 ${isCategorizingByAI ? 'animate-spin' : ''}`} />
+                <span>{isCategorizingByAI ? 'IA analisando seus hábitos...' : 'Auto-Categorizar com IA'}</span>
+              </button>
+            )}
           </div>
 
           {/* Date & Category */}

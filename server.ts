@@ -4,11 +4,45 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import https from 'https';
 import { GoogleGenAI, Type } from '@google/genai';
+import { initializeApp, getApps } from 'firebase-admin/app';
+import { getFirestore } from 'firebase-admin/firestore';
+import fs from 'fs';
 
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Read and initialize firebaseConfig safely using fs to avoid compilation module asset/type checks
+let firebaseConfig: any = {};
+try {
+  firebaseConfig = JSON.parse(
+    fs.readFileSync(path.resolve(__dirname, 'firebase-applet-config.json'), 'utf8')
+  );
+} catch (e) {
+  console.warn('[Firebase Config Error] Could not load firebase-applet-config.json:', e);
+}
+
+const dbId = firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreDatabaseId !== '(default)'
+  ? firebaseConfig.firestoreDatabaseId
+  : '(default)';
+
+// Initialize Firebase Admin
+let adminApp: any = undefined;
+if (getApps().length === 0 && firebaseConfig.projectId) {
+  try {
+    adminApp = initializeApp({
+      projectId: firebaseConfig.projectId,
+    });
+    console.log('[Firebase Admin] Inicializado com sucesso para o projeto:', firebaseConfig.projectId);
+  } catch (err) {
+    console.error('[Firebase Admin] Erro de inicialização:', err);
+  }
+}
+
+const dbAdmin = firebaseConfig.projectId 
+  ? getFirestore(getApps()[0] || adminApp, dbId) 
+  : null;
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -494,6 +528,7 @@ app.post('/api/inter/test-connection', async (req, res) => {
 interface StoredNotificationTx {
   id: string;
   receivedAt: string;
+  time?: string;
   description: string;
   amount: number;
   type: 'credit' | 'debit';
@@ -506,9 +541,68 @@ interface StoredNotificationTx {
 
 const pendingNotifications: StoredNotificationTx[] = [];
 
+function cleanTransactionDescription(rawText: string): string {
+  let desc = rawText;
+
+  // 0. Strip unreplaced Macrodroid variable brackets/placeholders
+  desc = desc.replace(/\[notification_title\]/gi, '');
+  desc = desc.replace(/\[notif_title\]/gi, '');
+  desc = desc.replace(/\[notification_text\]/gi, '');
+  desc = desc.replace(/\[notif_text\]/gi, '');
+  desc = desc.replace(/\[notif_app_name\]/gi, '');
+
+  // 1. Remove BRL values (e.g. "R$ 42,00", "42.00")
+  desc = desc.replace(/(?:R\$\s*)?\d{1,4}(?:\.\d{3})*,\d{2}/gi, '');
+  desc = desc.replace(/(?:R\$\s*)?\d+\.\d{2}/gi, '');
+
+  // 2. Clean typical prefixes and boilerplate phrases (case-insensitive)
+  desc = desc.replace(/compra\s+no\s+débito\s*:?/gi, '');
+  desc = desc.replace(/compra\s+no\s+crédito\s*:?/gi, '');
+  desc = desc.replace(/compra\s+aprovada\s*:?/gi, '');
+  desc = desc.replace(/você\s+pagou/gi, '');
+  desc = desc.replace(/transferência\s+enviada/gi, '');
+  desc = desc.replace(/transferência/gi, '');
+  desc = desc.replace(/pix\s+enviado\s+para/gi, '');
+  desc = desc.replace(/pix\s+recebido\s+de/gi, '');
+  desc = desc.replace(/pix\s+recebidos\s+de/gi, '');
+  desc = desc.replace(/no\s+cartão/gi, '');
+  desc = desc.replace(/de\s+R\$\s*/gi, '');
+
+  // 3. Remove "No estabelecimento", "no estabelecimento", "estabelecimento"
+  desc = desc.replace(/no\s+estabelecimento\s*/gi, '');
+  desc = desc.replace(/No\s+estabelecimento\s*/gi, '');
+  desc = desc.replace(/estabelecimento\s*/gi, '');
+
+  // 4. Remove bank qualifiers and card endings
+  desc = desc.replace(/com\s+o\s+cartão\s+\w+/gi, '');
+  desc = desc.replace(/com\s+o\s+cartão/gi, '');
+  desc = desc.replace(/no\s+Nubank/gi, '');
+  desc = desc.replace(/no\s+Inter/gi, '');
+  desc = desc.replace(/com\s+o\s+Nubank/gi, '');
+  desc = desc.replace(/com\s+o\s+Inter/gi, '');
+
+  // 5. Clean symbols, brackets, and quotes
+  desc = desc.replace(/[\(\)•\-\:"']/g, ' ');
+
+  // 6. Trim and collapse multiple spaces
+  desc = desc.replace(/\s+/g, ' ').trim();
+
+  // 7. Capitalize first letter
+  if (desc) {
+    desc = desc.charAt(0).toUpperCase() + desc.slice(1);
+  }
+
+  return desc;
+}
+
 // Helper to extract bank and values from notification text
 function parseNotificationPayload(body: any): StoredNotificationTx | null {
-  const rawText = `${body.title || ''} ${body.text || body.message || body.body || ''} ${typeof body === 'string' ? body : ''}`.trim();
+  if (!body) return null;
+
+  // Normalise payload fields from multiple mobile push formats (MacroDroid, Tasker, etc.)
+  const bodyTitle = (body.title || body.notification_title || body.notif_title || '').trim();
+  const bodyText = (body.text || body.message || body.body || body.notification_text || body.notif_text || '').trim();
+  const rawText = `${bodyTitle} ${bodyText} ${typeof body === 'string' ? body : ''}`.trim();
   if (!rawText) return null;
 
   // Monetary value regex
@@ -519,34 +613,45 @@ function parseNotificationPayload(body: any): StoredNotificationTx | null {
   const parsedVal = parseFloat(valStr);
   if (isNaN(parsedVal)) return null;
 
-  const isCredit = /receb|depósito|crédito em conta|reembolso|salário|estorno/i.test(rawText);
+  // Robust Credit vs Debit classifier
+  // 1. Explicit debit patterns (takes precedence over generic credit matches)
+  const isDebit = (
+    /compra|pagou|enviado|saída|saida|débito|debito/i.test(rawText) ||
+    (/enviou/i.test(rawText) && !/te\s+enviou/i.test(rawText))
+  );
+  
+  // 2. Explicit credit patterns
+  const isCreditCheck = /receb|depósito|deposito|crédito em conta|reembolso|salário|salario|estorno|te enviou|recebeu|recebido|creditado/i.test(rawText);
+
+  // Classified as credit only if matching credit terms and not marked as a debit/purchase
+  const isCredit = isCreditCheck && !isDebit;
   const amount = isCredit ? Math.abs(parsedVal) : -Math.abs(parsedVal);
 
   const upper = rawText.toUpperCase();
+  const titleStr = bodyTitle.toUpperCase();
+  const appName = (body.app || body.package || body.app_name || body.package_name || body.appName || body.packageName || '').toUpperCase();
+
   let bank: 'NUBANK' | 'BANCO_INTER' | 'ITAU' | 'BRADESCO' | 'SANTANDER' | 'C6' | 'CAIXA' | 'CARTEIRA' = 'NUBANK';
 
-  const appName = (body.app || body.package || '').toUpperCase();
-  if (appName.includes('INTER') || upper.includes('BANCO INTER') || upper.includes('INTER ') || upper.includes('077')) {
+  if (appName.includes('INTER') || appName.includes('INTERMEDIUM') || titleStr.includes('INTER') || upper.includes('BANCO INTER') || upper.includes('INTER ') || upper.includes('077') || upper.includes('CONTA FINAL') || upper.includes('FINAL ***')) {
     bank = 'BANCO_INTER';
-  } else if (appName.includes('ITAU') || upper.includes('ITAÚ') || upper.includes('ITAU')) {
+  } else if (appName.includes('NUBANK') || titleStr.includes('NUBANK') || upper.includes('NUBANK')) {
+    bank = 'NUBANK';
+  } else if (appName.includes('ITAU') || titleStr.includes('ITAÚ') || titleStr.includes('ITAU') || upper.includes('ITAÚ') || upper.includes('ITAU')) {
     bank = 'ITAU';
-  } else if (appName.includes('BRADESCO') || upper.includes('BRADESCO')) {
+  } else if (appName.includes('BRADESCO') || titleStr.includes('BRADESCO') || upper.includes('BRADESCO')) {
     bank = 'BRADESCO';
-  } else if (appName.includes('SANTANDER') || upper.includes('SANTANDER')) {
+  } else if (appName.includes('SANTANDER') || titleStr.includes('SANTANDER') || upper.includes('SANTANDER')) {
     bank = 'SANTANDER';
-  } else if (appName.includes('C6') || upper.includes('C6 BANK') || upper.includes('C6BANK')) {
+  } else if (appName.includes('C6') || titleStr.includes('C6') || upper.includes('C6 BANK') || upper.includes('C6BANK')) {
     bank = 'C6';
-  } else if (appName.includes('CAIXA') || upper.includes('CAIXA')) {
+  } else if (appName.includes('CAIXA') || titleStr.includes('CAIXA') || upper.includes('CAIXA')) {
     bank = 'CAIXA';
   } else {
     bank = 'NUBANK';
   }
 
-  let desc = rawText
-    .replace(/(?:R\$\s*)?\d{1,4}(?:\.\d{3})*,\d{2}/gi, '')
-    .replace(/você pagou|compra aprovada|transferência enviada|transferência|pix enviado para|pix recebido de|no cartão/gi, '')
-    .replace(/[\(\)•\-]/g, ' ')
-    .trim();
+  let desc = cleanTransactionDescription(rawText);
 
   if (!desc || desc.length < 3) {
     desc = `Movimentação ${bank}`;
@@ -558,6 +663,7 @@ function parseNotificationPayload(body: any): StoredNotificationTx | null {
   return {
     id: `push-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
     receivedAt: new Date().toISOString(),
+    time: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
     description: desc,
     amount,
     type,
@@ -569,8 +675,22 @@ function parseNotificationPayload(body: any): StoredNotificationTx | null {
   };
 }
 
+// GET Webhook endpoint to show status and instructions for users testing in browsers
+app.get('/api/notifications/webhook', (_req, res) => {
+  return res.json({
+    status: 'active',
+    message: 'O webhook de notificações do RetroFin está ativo e pronto para receber requisições POST!',
+    instructions: 'Para integrar com o MacroDroid ou Tasker, configure sua regra para enviar uma requisição POST (com cabeçalho Content-Type: application/json) contendo os dados da notificação no corpo.',
+    example_payload: {
+      app: 'Nubank',
+      title: 'Compra aprovada no cartão',
+      text: 'Você pagou R$ 38,50 em Padaria Bella Vista com o cartão Nubank'
+    }
+  });
+});
+
 // Webhook endpoint for MacroDroid / Tasker / Mobile Push (Android & iOS)
-app.post('/api/notifications/webhook', (req, res) => {
+app.post('/api/notifications/webhook', async (req, res) => {
   try {
     const item = parseNotificationPayload(req.body);
     if (!item) {
@@ -581,17 +701,227 @@ app.post('/api/notifications/webhook', (req, res) => {
       });
     }
 
-    pendingNotifications.push(item);
-    if (pendingNotifications.length > 50) {
-      pendingNotifications.shift();
-    }
+    const body = req.body || {};
+    const rawText = `${body.title || ''} ${body.text || body.message || body.body || ''} ${typeof body === 'string' ? body : ''}`.trim();
 
-    console.log(`[Push Notification] Lançamento recebido: ${item.description} (${item.amount})`);
-    return res.json({
-      success: true,
-      message: 'Notificação recebida com sucesso e armazenada para o RetroFin!',
-      item,
-    });
+    const userId = req.query.userId || req.body.userId || req.body.token || req.query.token;
+
+    if (userId && typeof userId === 'string' && dbAdmin) {
+      try {
+        // Read user's registered bank accounts from Firestore
+        const accountsSnapshot = await dbAdmin.collection('users').doc(userId).collection('accounts').get();
+        const accountsList: any[] = [];
+        accountsSnapshot.forEach((doc: any) => {
+          accountsList.push({ id: doc.id, ...doc.data() });
+        });
+
+        // Try to match accounts with transaction's bank
+        let matchingAccount = accountsList.find(acc => acc.institution === item.bank);
+        if (!matchingAccount) {
+          // If no institution match, try finding by name matching
+          matchingAccount = accountsList.find(acc => acc.name.toUpperCase().includes(item.bank.toUpperCase()));
+        }
+        if (!matchingAccount && accountsList.length > 0) {
+          // Fallback to first available account
+          matchingAccount = accountsList[0];
+        }
+
+        const accountId = matchingAccount ? matchingAccount.id : 'acc-manual';
+        const accountName = matchingAccount ? matchingAccount.name : `Conta ${item.bank}`;
+        const accountPurpose = matchingAccount ? matchingAccount.purpose : 'Geral';
+
+        // Prepare a fully valid standard Transaction object
+        const now = new Date();
+        const txDate = now.toISOString().substring(0, 10); // YYYY-MM-DD
+        const txTime = now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+        const createdAt = now.toISOString();
+        const transactionId = `push-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+
+        const transactionData = {
+          id: transactionId,
+          date: txDate,
+          time: txTime,
+          createdAt,
+          description: item.description,
+          amount: item.amount,
+          type: item.type,
+          category: item.category,
+          subcategory: item.subcategory,
+          channel: item.channel,
+          accountId,
+          accountName,
+          bankInstitution: item.bank,
+          bank: item.bank,
+          account: accountName,
+          accountPurpose,
+          isCategorizedByAI: true,
+          status: 'liquidado',
+          notes: `Recebido por webhook via ${item.source}`,
+          tags: ['webhook', item.bank.toLowerCase()],
+        };
+
+        // Write directly to user's Firestore database!
+        await dbAdmin.collection('users').doc(userId).collection('transactions').doc(transactionId).set(transactionData);
+        console.log(`[Firestore Webhook] Transação gravada diretamente para o usuário ${userId}: ${transactionId}`);
+
+        // Check if this is a transfer to same ownership (transação interna de mesma titularidade)
+        const isInterToNubank = item.bank === 'NUBANK' && (/recebemos sua transferência|recebemos sua/i.test(rawText));
+        const isNubankToInter = item.bank === 'BANCO_INTER' && (/joão pedro|joao pedro/i.test(rawText) && /te enviou um pix|creditado/i.test(rawText));
+
+        if (isInterToNubank) {
+          // 1. Force original transaction description
+          transactionData.description = 'Transferência Inter → Nubank';
+          transactionData.category = 'Transferências';
+          transactionData.subcategory = 'Mesma Titularidade';
+          
+          // Re-write original with new description
+          await dbAdmin.collection('users').doc(userId).collection('transactions').doc(transactionId).set(transactionData);
+
+          // 2. Create the mirror debit on Inter
+          const interAccount = accountsList.find(acc => acc.institution === 'BANCO_INTER') || accountsList.find(acc => acc.id !== accountId);
+          if (interAccount) {
+            const mirrorTxId = `push-mirror-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+            const mirrorAmount = -Math.abs(item.amount); // Always debit
+            const mirrorTransactionData = {
+              id: mirrorTxId,
+              date: txDate,
+              time: txTime,
+              createdAt,
+              description: 'Débito na conta Inter',
+              amount: mirrorAmount,
+              type: 'debit',
+              category: 'Transferências',
+              subcategory: 'Mesma Titularidade',
+              channel: 'Pix',
+              accountId: interAccount.id,
+              accountName: interAccount.name,
+              bankInstitution: 'BANCO_INTER',
+              bank: 'BANCO_INTER',
+              account: interAccount.name,
+              accountPurpose: interAccount.purpose || 'Geral',
+              isCategorizedByAI: true,
+              status: 'liquidado',
+              notes: 'Gerado automaticamente como contrapartida da transferência interna recebida no Nubank',
+              tags: ['webhook', 'transferencia-interna', 'banco_inter'],
+            };
+            await dbAdmin.collection('users').doc(userId).collection('transactions').doc(mirrorTxId).set(mirrorTransactionData);
+            console.log(`[Firestore Webhook] Transação espelho (Débito Inter) criada para o usuário ${userId}: ${mirrorTxId}`);
+          }
+        } else if (isNubankToInter) {
+          // 1. Force original transaction description
+          transactionData.description = 'Transferência Nubank → Inter';
+          transactionData.category = 'Transferências';
+          transactionData.subcategory = 'Mesma Titularidade';
+
+          // Re-write original with new description
+          await dbAdmin.collection('users').doc(userId).collection('transactions').doc(transactionId).set(transactionData);
+
+          // 2. Create the mirror debit on Nubank
+          const nubankAccount = accountsList.find(acc => acc.institution === 'NUBANK') || accountsList.find(acc => acc.id !== accountId);
+          if (nubankAccount) {
+            const mirrorTxId = `push-mirror-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+            const mirrorAmount = -Math.abs(item.amount); // Always debit
+            const mirrorTransactionData = {
+              id: mirrorTxId,
+              date: txDate,
+              time: txTime,
+              createdAt,
+              description: 'Débito na conta Nubank',
+              amount: mirrorAmount,
+              type: 'debit',
+              category: 'Transferências',
+              subcategory: 'Mesma Titularidade',
+              channel: 'Pix',
+              accountId: nubankAccount.id,
+              accountName: nubankAccount.name,
+              bankInstitution: 'NUBANK',
+              bank: 'NUBANK',
+              account: nubankAccount.name,
+              accountPurpose: nubankAccount.purpose || 'Geral',
+              isCategorizedByAI: true,
+              status: 'liquidado',
+              notes: 'Gerado automaticamente como contrapartida da transferência interna recebida no Banco Inter',
+              tags: ['webhook', 'transferencia-interna', 'nubank'],
+            };
+            await dbAdmin.collection('users').doc(userId).collection('transactions').doc(mirrorTxId).set(mirrorTransactionData);
+            console.log(`[Firestore Webhook] Transação espelho (Débito Nubank) criada para o usuário ${userId}: ${mirrorTxId}`);
+          }
+        } else {
+          // Regular same-titularity fallback if we couldn't match the specific banks but name matches
+          const isGenericSelfTransfer = /joão pedro rocha rizzi|joao pedro rocha rizzi/i.test(rawText);
+          if (isGenericSelfTransfer) {
+            const otherAccount = accountsList.find(acc => acc.id !== accountId) || accountsList.find(acc => acc.institution !== item.bank);
+            if (otherAccount) {
+              const mirrorTxId = `push-mirror-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+              const mirrorAmount = -item.amount;
+              const mirrorType = mirrorAmount >= 0 ? 'credit' : 'debit';
+              const opposingBankName = item.bank === 'BANCO_INTER' ? 'Banco Inter' : item.bank === 'NUBANK' ? 'Nubank' : item.bank;
+              
+              let mirrorDesc = mirrorType === 'credit' ? `Transferência recebida de ${opposingBankName}` : `Transferência enviada para ${opposingBankName}`;
+              
+              const mirrorTransactionData = {
+                id: mirrorTxId,
+                date: txDate,
+                time: txTime,
+                createdAt,
+                description: mirrorDesc,
+                amount: mirrorAmount,
+                type: mirrorType,
+                category: 'Transferências',
+                subcategory: 'Mesma Titularidade',
+                channel: 'Pix',
+                accountId: otherAccount.id,
+                accountName: otherAccount.name,
+                bankInstitution: otherAccount.institution,
+                bank: otherAccount.institution,
+                account: otherAccount.name,
+                accountPurpose: otherAccount.purpose || 'Geral',
+                isCategorizedByAI: true,
+                status: 'liquidado',
+                notes: `Gerado automaticamente como contrapartida no ${opposingBankName}`,
+                tags: ['webhook', 'transferencia-interna'],
+              };
+              await dbAdmin.collection('users').doc(userId).collection('transactions').doc(mirrorTxId).set(mirrorTransactionData);
+            }
+          }
+        }
+
+        return res.json({
+          success: true,
+          message: 'Notificação recebida com sucesso e persistida no seu banco de dados!',
+          item: transactionData,
+          persisted: true,
+        });
+      } catch (dbErr: any) {
+        console.error('[Firestore Webhook Error] Falha ao persistir no banco:', dbErr);
+        // Fallback to memory
+        pendingNotifications.push(item);
+        if (pendingNotifications.length > 50) {
+          pendingNotifications.shift();
+        }
+
+        return res.json({
+          success: true,
+          message: 'Notificação recebida, mas falhou ao gravar no Firestore. Armazenado temporariamente em memória.',
+          item,
+          persisted: false,
+          error: dbErr.message,
+        });
+      }
+    } else {
+      pendingNotifications.push(item);
+      if (pendingNotifications.length > 50) {
+        pendingNotifications.shift();
+      }
+
+      console.log(`[Push Notification] Lançamento recebido em memória (sem userId): ${item.description} (${item.amount})`);
+      return res.json({
+        success: true,
+        message: 'Notificação recebida e guardada na memória! Para persistência automática direta, adicione ?userId=SEU_ID na URL.',
+        item,
+        persisted: false,
+      });
+    }
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err.message });
   }
