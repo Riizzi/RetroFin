@@ -493,7 +493,7 @@ async function startServer() {
     });
   }
   app.listen(PORT, () => {
-    console.log(`[InterGest\xE3o] Servidor rodando na porta ${PORT}`);
+    console.log(`[RetroFin] Servidor rodando na porta ${PORT}`);
   });
 }
 startServer();

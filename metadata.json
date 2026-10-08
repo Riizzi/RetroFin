@@ -1,6 +1,6 @@
 {
-  "name": "InterGestão - Finanças & Banco Inter",
-  "description": "Aplicativo móvel de controle de gastos e finanças pessoais com integração ao Banco Inter (Open Finance API), categorização automática por IA e gestão mensal.",
+  "name": "RetroFin",
+  "description": "Controle de finanças pessoais com categorização por IA, importação OFX e lançamentos automáticos a partir de notificações bancárias (Nubank, Inter e outros).",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
