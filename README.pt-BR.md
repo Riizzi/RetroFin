@@ -23,7 +23,7 @@ Controle de finanças pessoais que lança os gastos sozinho: importa extratos, l
 - **App Android (APK)** gerado pelo GitHub Actions a cada push, além da versão web/PWA
 - **Link com o CL4P-RZ**: envia um resumo dos lançamentos para o hub pessoal [CL4P-RZ](https://github.com/Riizzi/CL4P-RZ), que cruza gastos com lugares, despensa e lista de desejos
 - **Importação de extratos** em OFX, CSV ou texto copiado do app do banco
-- **Categorização com IA** (Gemini) em lote, aprendendo com exemplos corrigidos manualmente. Sem chave de API, um motor de regras local assume
+- **Categorização em camadas**: o que você classificou nunca é sobrescrito; uma correção sua vale para todos os lançamentos do mesmo estabelecimento; estabelecimentos conhecidos vão por regra; só o resto vai para o Gemini, com as suas categorias e exemplos, resposta presa à lista de categorias e sem nomes de pessoas
 - **Insights da IA** sobre os gastos do mês
 - **Orçamento por categoria** com metas mensais
 - **Gráficos** de gastos por categoria e por mês
@@ -92,9 +92,14 @@ A tela de notificações mostra as últimas lidas e o motivo quando uma é ignor
 
 Para levar os dados da versão web: **Backup e vínculos → Exportar** na web e **Restaurar** no APK.
 
-> **Assinatura do APK:** a keystore está em `android/app/retrofin.keystore`. Antes de deixar o repositório público, cadastre os secrets `RETROFIN_KEYSTORE_*` (ver `android/app/build.gradle`) e remova a keystore do repositório.
+> **Assinatura do APK:** a chave fica só nos *Secrets* do GitHub (`ANDROID_KEYSTORE_BASE64` e `ANDROID_KEYSTORE_PASSWORD`), nunca no repositório. Sem eles, o workflow compila com uma chave temporária e não publica em Releases.
 
-As rotas de webhook (`/api/notifications/*`) continuam no servidor para quem usa MacroDroid ou Tasker, mas não são mais necessárias.
+## Privacidade e servidor
+
+- As rotas de webhook do MacroDroid foram removidas: elas gravavam no banco de qualquer usuário só com o id na URL.
+- Em servidor público, defina `RETROFIN_API_KEY` e cole o mesmo valor em **Backup e vínculos → Categorização**. Sem a chave, quem descobrir a URL consegue usar a sua cota do Gemini.
+- Para a IA vão só descrição do estabelecimento, valor, data e canal. Pix para pessoas vai como `Pix para [pessoa]`.
+- O Firestore só deixa cada usuário ler e gravar os próprios dados (`firestore.rules`).
 
 ## Licença
 

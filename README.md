@@ -25,7 +25,7 @@ A personal finance tracker that logs spending on its own: it imports bank statem
 - **Android app (APK)** built by GitHub Actions on every push, alongside the web/PWA version
 - **CL4P-RZ link**: sends a summary to the personal hub [CL4P-RZ](https://github.com/Riizzi/CL4P-RZ), which cross-references spending with places, pantry and wishlist
 - **Statement import** from OFX, CSV or text copied from the bank app
-- **AI categorization** (Gemini) in batches, learning from manually corrected examples. Without an API key, a local rule engine takes over
+- **Layered categorization**: your manual choices are never overwritten; a correction applies to every transaction from the same merchant; known merchants go through rules; only the rest goes to Gemini, with your categories and examples, a schema-restricted answer and no personal names
 - **AI insights** on the month's spending
 - **Category budgets** with monthly goals
 - **Charts** of spending by category and by month
@@ -89,9 +89,13 @@ To use your own Firebase project, replace the values in `firebase-applet-config.
 4. If Android shows *Restricted setting* (default for sideloaded apps on Android 13+): **Settings → Apps → RetroFin → ⋮ → Allow restricted settings**, then repeat step 3.
 5. Set battery usage to **Unrestricted**.
 
-> **APK signing:** the keystore lives in `android/app/retrofin.keystore`. Before making the repository public, add the `RETROFIN_KEYSTORE_*` secrets (see `android/app/build.gradle`) and remove the keystore from the repo.
+> **APK signing:** the key lives only in GitHub Secrets (`ANDROID_KEYSTORE_BASE64` and `ANDROID_KEYSTORE_PASSWORD`), never in the repository. Without them, the workflow builds with a throwaway key and skips the release.
 
-The webhook routes (`/api/notifications/*`) are still available for MacroDroid/Tasker users but are no longer needed.
+## Privacy and server
+
+- The MacroDroid webhook routes were removed: they wrote into any user's database given just the id in the URL.
+- On a public server, set `RETROFIN_API_KEY` and paste the same value in **Backup e vínculos → Categorização**.
+- Only merchant description, amount, date and channel are sent to the AI. Pix to people is sent as `Pix para [pessoa]`.
 
 ## License
 

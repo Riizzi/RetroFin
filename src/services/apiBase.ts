@@ -3,8 +3,6 @@
  * Na web é a própria origem. No APK não existe servidor local: usa o endereço salvo nos ajustes
  * (vazio = recursos de IA caem no motor de regras local, que funciona offline).
  */
-import { Capacitor } from '@capacitor/core';
-
 const CHAVE = 'retrofin_api_base_v1';
 
 export function getApiBase(): string {
@@ -23,11 +21,4 @@ export function setApiBase(url: string) {
   } catch {
     /* sem armazenamento */
   }
-}
-
-export function apiUrl(caminho: string): string {
-  const base = getApiBase();
-  if (base) return base + caminho;
-  if (Capacitor.isNativePlatform()) throw new Error('Servidor de IA não configurado');
-  return caminho;
 }

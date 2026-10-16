@@ -1,9 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { BellRing, CheckCircle2, Download, ExternalLink, ShieldAlert, XCircle } from 'lucide-react';
+import { BellRing, CheckCircle2, Download, ExternalLink, XCircle } from 'lucide-react';
 import { ehNativo, leitor, type StatusLeitor } from '../native/retrofinNative';
 import { NOMES_APP_BANCO } from '../services/bankNotifications';
 import { lerLog, limparLog, type ItemLog } from '../services/notifLog';
-import { getApiBase, setApiBase } from '../services/apiBase';
 import { formatCurrencyBRL } from '../utils/formatters';
 
 const RELEASES = 'https://github.com/Riizzi/RetroFin/releases/latest';
@@ -19,8 +18,6 @@ function quando(ts: number) {
 export const NotificationReaderPanel: React.FC = () => {
   const [status, setStatus] = useState<StatusLeitor | null>(null);
   const [log, setLog] = useState<ItemLog[]>(lerLog);
-  const [api, setApi] = useState(getApiBase);
-  const [apiSalva, setApiSalva] = useState(false);
 
   const atualizar = useCallback(async () => {
     setStatus(await leitor.status().catch(() => null));
@@ -143,39 +140,6 @@ export const NotificationReaderPanel: React.FC = () => {
         )}
       </div>
 
-      <div className={`${cartao} space-y-3`}>
-        <div className="flex items-center gap-2">
-          <ShieldAlert className="w-4 h-4 text-[#78716C]" />
-          <p className={rotulo}>Servidor de IA (opcional)</p>
-        </div>
-        <p className="text-xs text-[#78716C] leading-relaxed">
-          A categorização por IA e os insights usam o servidor do RetroFin. Sem endereço, o app usa o motor de regras local, que funciona offline.
-        </p>
-        <div className="flex gap-2">
-          <input
-            value={api}
-            onChange={(e) => {
-              setApi(e.target.value);
-              setApiSalva(false);
-            }}
-            placeholder="https://seu-retrofin.onrender.com"
-            inputMode="url"
-            autoCapitalize="off"
-            autoCorrect="off"
-            className="flex-1 min-w-0 bg-[#FAF7F2] border border-[#E8DFD1] px-3 py-2.5 rounded-xl text-base text-[#292524] focus:outline-none"
-          />
-          <button
-            type="button"
-            onClick={() => {
-              setApiBase(api);
-              setApiSalva(true);
-            }}
-            className="min-h-11 px-4 rounded-xl text-sm font-bold bg-[#292524] text-[#FAF7F2]"
-          >
-            {apiSalva ? 'Salvo' : 'Salvar'}
-          </button>
-        </div>
-      </div>
     </div>
   );
 };

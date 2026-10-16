@@ -158,12 +158,17 @@ export const TransactionModal: React.FC<Props> = ({
                 <Sparkles className="w-4 h-4 text-[#C68B59] shrink-0 mt-0.5" />
                 <div className="text-xs">
                   <span className="font-bold font-mono text-[#C68B59]">
-                    Categorização Automática por IA
-                    {transaction.aiConfidence ? ` (${Math.round(transaction.aiConfidence * 100)}%)` : ''}
+                    {transaction.categorizedBy === 'memoria'
+                      ? 'Categoria pela memória das suas correções'
+                      : transaction.categorizedBy === 'regras'
+                        ? 'Categoria por regra (estabelecimento conhecido)'
+                        : 'Categoria sugerida pela IA'}
+                    {transaction.categorizedBy === 'ia' && transaction.aiConfidence ? ` (${Math.round(transaction.aiConfidence * 100)}%)` : ''}
                   </span>
                   <p className="text-[#57534E] mt-0.5 leading-relaxed">
                     {transaction.aiReason || 'Identificado a partir do histórico de transações e da conta vinculada.'}
                   </p>
+                  <p className="text-[#78716C] mt-1 leading-relaxed">Se estiver errada, troque abaixo: o app aprende e aplica nos lançamentos do mesmo estabelecimento.</p>
                 </div>
               </div>
             )}

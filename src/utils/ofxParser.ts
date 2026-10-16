@@ -1,3 +1,5 @@
+import { classificarPorRegras } from '../services/categorizacao';
+import { lerNomeTitular } from '../services/preferencias';
 import { Transaction, PaymentChannel, BankInstitution, BankAccount } from '../types';
 
 export function cleanTransactionDescription(rawText: string): string {
@@ -115,7 +117,6 @@ export function classifyTransactionLocally(
   institution: BankInstitution;
 } {
   const d = desc.toUpperCase();
-  const purpose = (accountPurpose || '').toUpperCase();
 
   // Detect Bank Institution from description
   let institution: BankInstitution = 'OUTRO';
@@ -141,127 +142,14 @@ export function classifyTransactionLocally(
   else if (d.includes('CDB') || d.includes('APLICACAO') || d.includes('CAIXINHA') || d.includes('RDB') || d.includes('INVEST')) channel = 'INVESTIMENTO';
   else if (d.includes('DINHEIRO') || d.includes('ESPECIE')) channel = 'DINHEIRO';
 
-  // Context-aware bias based on account purpose (e.g., Casa & Mercado vs Pessoal)
-  const isHouseholdAccount = purpose.includes('CASA') || purpose.includes('MERCADO') || purpose.includes('CONDOMINIO');
-
-  // Income / Credits
-  if (type === 'credit') {
-    if (d.includes('SALARIO') || d.includes('FOLHA') || d.includes('PRO-LABORE')) {
-      return { category: 'receitas', subcategory: 'Salário / CLT', channel, institution };
-    }
-    if (d.includes('RENDIMENTO') || d.includes('JUROS') || d.includes('DIVIDENDO') || d.includes('CAIXINHA') || d.includes('CDB')) {
-      return { category: 'investimentos', subcategory: 'Rendimento de Aplicação', channel: 'INVESTIMENTO', institution };
-    }
-    if (d.includes('CASHBACK')) {
-      return { category: 'receitas', subcategory: 'Cashback', channel, institution };
-    }
-    return { category: 'receitas', subcategory: 'PIX Recebido / Depósito', channel, institution };
+  // Categoria: regras com limite de palavra (src/services/categorizacao.ts). Sem pista, "outros":
+  // a memória das suas correções e a IA resolvem depois.
+  void accountPurpose;
+  const r = classificarPorRegras(desc, type, lerNomeTitular());
+  if (r) {
+    return { ...r, channel: r.category === 'investimentos' ? 'INVESTIMENTO' : channel, institution };
   }
-
-  // Internal Transfers (Pix between accounts, transfer between user accounts, investments)
-  if (
-    d.includes('TRANSFERENCIA ENTRE CONTAS') || d.includes('TRANSF ENTRE CONTAS') ||
-    d.includes('MESMA TITULARIDADE') || d.includes('ENTRE MINHAS CONTAS') ||
-    d.includes('APLICACAO CAIXINHA') || d.includes('RESGATE CAIXINHA') ||
-    d.includes('APLICACAO CDB') || d.includes('RESGATE CDB')
-  ) {
-    return { category: 'transacao_interna', subcategory: 'Transferência Entre Contas / Aplicação', channel: 'INVESTIMENTO', institution };
-  }
-
-  // Snacks & Lanches Rápidos
-  if (
-    d.includes('DOCERIA') || d.includes('SORVETE') || d.includes('GELATO') ||
-    d.includes('CACAU SHOW') || d.includes('KOPENHAGEN') || d.includes('HAVANNA') ||
-    d.includes('FINI ') || d.includes('PIPOCA') || d.includes('BOMBONIERE') ||
-    d.includes('CONVENIENCIA') || d.includes('CONVENIÊNCIA') || d.includes('SNACK') ||
-    d.includes('DOCES') || d.includes('CHURROS') || d.includes('ACAI') || d.includes('AÇAÍ')
-  ) {
-    return { category: 'snacks', subcategory: 'Snacks & Sobremesas', channel, institution };
-  }
-
-  // Expenses - Food & Dining
-  if (
-    d.includes('IFOOD') || d.includes('RAPPI') || d.includes('UBER EATS') || d.includes('AIQFOME') ||
-    d.includes('BURGER') || d.includes('MCDONALD') || d.includes('MC DONALD') || d.includes('BK ') ||
-    d.includes('SUBWAY') || d.includes('ZE DELIVERY') || d.includes('DELIVERY') || d.includes('DOGAO')
-  ) {
-    return { category: 'alimentacao', subcategory: 'Delivery & Lanches', channel, institution };
-  }
-  if (
-    d.includes('CARREFOUR') || d.includes('PÃO DE AÇÚCAR') || d.includes('PAO DE ACUCAR') || d.includes('ASSAI') ||
-    d.includes('ATACADAO') || d.includes('ATACADÃO') || d.includes('MERCADO') || d.includes('SUPERMERCADO') ||
-    d.includes('HORTIFRUTI') || d.includes('HORTOFRUTI') || d.includes('FEIRA') || d.includes('SACOLÃO') ||
-    d.includes('SACOLAO') || d.includes('AÇOUGUE') || d.includes('ACOUGUE') || d.includes('MERCEARIA') ||
-    d.includes('OXXO') || d.includes('EMPORIO') || d.includes('EMPÓRIO') || d.includes('MINIMERCADO')
-  ) {
-    return { category: 'alimentacao', subcategory: isHouseholdAccount ? 'Supermercado (Casa)' : 'Supermercado', channel, institution };
-  }
-  if (
-    d.includes('PADARIA') || d.includes('PANIFIC') || d.includes('BAR ') || d.includes('BOTECO') ||
-    d.includes('PIZZARIA') || d.includes('PIZZA') || d.includes('LANCHONETE') || d.includes('RESTAURANTE') ||
-    d.includes('REST ') || d.includes('CAFE') || d.includes('CAFETERIA') || d.includes('CHURRASC') ||
-    d.includes('SUSHI') || d.includes('JAPA') || d.includes('TEMAKI') || d.includes('BISTRÔ') ||
-    d.includes('BISTRO')
-  ) {
-    return { category: 'alimentacao', subcategory: 'Restaurante & Bares', channel, institution };
-  }
-  if (d.includes('UBER') || d.includes('99APP') || d.includes('99 POP') || d.includes('TAXI') || d.includes('CABIFY')) {
-    return { category: 'transporte', subcategory: 'Transporte por App', channel, institution };
-  }
-  if (d.includes('POSTO') || d.includes('SHELL') || d.includes('IPIRANGA') || d.includes('BR DISTRIBUIDORA') || d.includes('COMBUSTIVEL')) {
-    return { category: 'transporte', subcategory: 'Combustível', channel, institution };
-  }
-
-  // Contas & Consumo (Luz, Água, Gás, Internet, Celular)
-  if (
-    d.includes('ENEL') || d.includes('CPFL') || d.includes('CEMIG') || d.includes('LIGHT') ||
-    d.includes('SABESP') || d.includes('SANEPAR') || d.includes('COPASA') || d.includes('ENERGIA') ||
-    d.includes('LUZ') || d.includes('AGUA') || d.includes('COMGAS') || d.includes('GAS') ||
-    d.includes('ULTRAGAZ') || d.includes('LIQUIGAS')
-  ) {
-    return { category: 'contas', subcategory: 'Contas de Consumo (Luz/Água/Gás)', channel, institution };
-  }
-  if (
-    d.includes('CLARO') || d.includes('VIVO') || d.includes('TIM') || d.includes('OI ') ||
-    d.includes('INTERNET') || d.includes('FIBRA') || d.includes('BANDA LARGA')
-  ) {
-    return { category: 'contas', subcategory: 'Internet & Telefonia', channel, institution };
-  }
-
-  // Moradia (Aluguel, Condomínio, IPTU)
-  if (d.includes('CONDOMINIO') || d.includes('CONDOMÍNIO') || d.includes('ALUGUEL') || d.includes('QUINTO ANDAR') || d.includes('QUINTOANDAR') || d.includes('LOFT') || d.includes('IPTU')) {
-    return { category: 'moradia', subcategory: 'Aluguel & Condomínio', channel, institution };
-  }
-  // Streaming & Assinaturas
-  if (d.includes('NETFLIX') || d.includes('SPOTIFY') || d.includes('AMAZON PRIME') || d.includes('DISNEY') || d.includes('MAX') || d.includes('YOUTUBE') || d.includes('APPLE.COM') || d.includes('DEEZER') || d.includes('GLOBOPLAY')) {
-    return { category: 'servicos', subcategory: 'Assinaturas & Streaming', channel, institution };
-  }
-  // Lazer & Saídas
-  if (d.includes('CINEMA') || d.includes('CINEMARK') || d.includes('CINEPOLIS') || d.includes('UCI') || d.includes('INGRESSO') || d.includes('SYMPLA') || d.includes('EVENTIM') || d.includes('SHOW') || d.includes('TEATRO') || d.includes('PARQUE') || d.includes('MUSEU') || d.includes('BALADA') || d.includes('BAR') || d.includes('PUB')) {
-    return { category: 'lazer', subcategory: 'Lazer & Saídas', channel, institution };
-  }
-  if (d.includes('DROGASIL') || d.includes('DROGA RAIA') || d.includes('FARMACIA') || d.includes('DROGARIA') || d.includes('PACHECO') || d.includes('PANVEL') || d.includes('ULTRAFARMA')) {
-    return { category: 'farmacia', subcategory: 'Farmácia & Higiene', channel, institution };
-  }
-  if (d.includes('SMART FIT') || d.includes('BLUEFIT') || d.includes('ACADEMIA') || d.includes('GYMPASS') || d.includes('TOTALPASS')) {
-    return { category: 'saude', subcategory: 'Academia & Treinos', channel, institution };
-  }
-  if (d.includes('HOSPITAL') || d.includes('LABORATORIO') || d.includes('FLEURY') || d.includes('LAVOISIER') || d.includes('CONSULTORIO') || d.includes('MEDICO') || d.includes('MÉDICO') || d.includes('CLINICA') || d.includes('CLÍNICA') || d.includes('ODONTO') || d.includes('DENTISTA') || d.includes('UNIMED') || d.includes('BRADESCO SAUDE')) {
-    return { category: 'saude', subcategory: 'Consultas & Exames Médicos', channel, institution };
-  }
-  if (d.includes('MERCADO LIVRE') || d.includes('AMAZON') || d.includes('SHOPEE') || d.includes('SHEIN') || d.includes('ZARA') || d.includes('RENNER')) {
-    return { category: 'compras', subcategory: 'Compras & Shopping', channel, institution };
-  }
-  if (d.includes('CDB') || d.includes('APLICACAO') || d.includes('TESOURO') || d.includes('CAIXINHA') || d.includes('INVEST')) {
-    return { category: 'investimentos', subcategory: 'Aporte de Reserva', channel: 'INVESTIMENTO', institution };
-  }
-
-  // Fallback respecting account purpose if available
-  if (isHouseholdAccount) {
-    return { category: 'moradia', subcategory: 'Despesa Doméstica', channel, institution };
-  }
-
-  return { category: 'outros', subcategory: 'Diversos', channel, institution };
+  return { category: type === 'credit' ? 'receitas' : 'outros', subcategory: type === 'credit' ? 'Entrada' : 'Diversos', channel, institution };
 }
 
 // Parses OFX file from any bank (Nubank, Inter, Itaú, etc.)

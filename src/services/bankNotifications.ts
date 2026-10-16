@@ -182,7 +182,7 @@ function contaDoBanco(accounts: BankAccount[], bank: BankInstitution, excluir?: 
  * Monta a(s) transação(ões). Transferência entre contas próprias (Inter ⇄ Nubank) gera também
  * o lançamento espelho na outra conta, como o webhook fazia.
  */
-export function montarTransacoes(n: NotificacaoBruta, i: Interpretacao, accounts: BankAccount[], nomeTitular = 'joão pedro'): Transaction[] {
+export function montarTransacoes(n: NotificacaoBruta, i: Interpretacao, accounts: BankAccount[], nomeTitular = ''): Transaction[] {
   const { date, time } = dataHoraLocal(n.postedAt);
   const createdAt = new Date(n.postedAt).toISOString();
   const conta = contaDoBanco(accounts, i.bank) || accounts[0];
@@ -205,6 +205,7 @@ export function montarTransacoes(n: NotificacaoBruta, i: Interpretacao, accounts
     account: conta?.name,
     accountPurpose: conta?.purpose,
     isCategorizedByAI: true,
+    categorizedBy: 'regras',
     aiConfidence: 0.85,
     aiReason: 'Lançado pela notificação do banco no celular',
     notes: `Notificação do app ${NOMES_APP_BANCO[n.pkg] || n.app || n.pkg}`,
@@ -215,7 +216,7 @@ export function montarTransacoes(n: NotificacaoBruta, i: Interpretacao, accounts
   const titular = nomeTitular.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
   const texto = i.rawText.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
   const interInterna = i.bank === 'NUBANK' && /recebemos sua transferencia|recebemos sua/.test(texto);
-  const mesmaPessoa = titular.length > 3 && texto.includes(titular) && /te enviou|enviou|creditad|recebid|transfer/.test(texto);
+  const mesmaPessoa = titular.length >= 5 && texto.includes(titular) && /te enviou|enviou|creditad|recebid|transfer/.test(texto);
   if (!interInterna && !mesmaPessoa) return [base];
 
   const outra = contaDoBanco(accounts, i.bank === 'NUBANK' ? 'BANCO_INTER' : i.bank === 'BANCO_INTER' ? 'NUBANK' : 'OUTRO', conta?.id) || accounts.find((a) => a.id !== conta?.id);

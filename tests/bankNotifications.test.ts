@@ -42,7 +42,7 @@ test('transferência entre contas próprias gera espelho', () => {
   const r = interpretar(n('br.com.intermedium', 'Pix recebido', 'João Pedro Rocha Rizzi te enviou um Pix de R$ 200,00'));
   assert.ok(r.ok);
   if (!r.ok) return;
-  const txs = montarTransacoes(n('br.com.intermedium', '', ''), r, contas);
+  const txs = montarTransacoes(n('br.com.intermedium', '', ''), r, contas, 'João Pedro Rocha Rizzi');
   assert.equal(txs.length, 2);
   assert.equal(txs[0].accountId, 'inter');
   assert.equal(txs[0].amount, 200);

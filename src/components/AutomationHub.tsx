@@ -6,6 +6,7 @@ import { BankBadge } from './BankBadge';
 import { ConfirmationModal } from './ConfirmationModal';
 import { NotificationReaderPanel } from './NotificationReaderPanel';
 import Cl4pLinkCard from './Cl4pLinkCard';
+import { IaAjustesCard } from './IaAjustesCard';
 import {
   Smartphone,
   Zap,
@@ -362,7 +363,8 @@ export const AutomationHub: React.FC<Props> = ({
 
       {/* SUBTAB 2: LOCAL DATABASE & PRIVACY */}
       {activeSubtab === 'backup' && (
-        <div className="p-6 rounded-2xl bg-[#FFFDF9] border border-[#E8DFD1] shadow-[2px_2px_0px_#E5DCD0] space-y-6">
+        <div className="p-4 sm:p-6 rounded-2xl bg-[#FFFDF9] border border-[#E8DFD1] shadow-[2px_2px_0px_#E5DCD0] space-y-6">
+          <IaAjustesCard />
           <Cl4pLinkCard />
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-[#386641]/10 text-[#386641] flex items-center justify-center font-bold">

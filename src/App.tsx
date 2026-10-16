@@ -22,7 +22,8 @@ import {
   lockAppSession,
   SecurityConfig,
 } from './utils/security';
-import { categorizeTransactionsWithAI, fetchAIInsights } from './services/categorizer';
+import { categorizarLancamentos, fetchAIInsights } from './services/categorizer';
+import { chaveEstabelecimento, ehManual } from './services/categorizacao';
 import { formatCurrencyBRL, formatMonthName, getTransactionTimestamp } from './utils/formatters';
 import { cleanTransactionDescription } from './utils/ofxParser';
 import {
@@ -63,6 +64,7 @@ import { INITIAL_CATEGORIES } from './data/categories';
 import { ehNativo, leitor } from './native/retrofinNative';
 import { interpretar, montarTransacoes } from './services/bankNotifications';
 import { registrarNoLog } from './services/notifLog';
+import { lerNomeTitular } from './services/preferencias';
 import { cl4pCapturarDaUrl, cl4pCapturarDeepLink, cl4pPublicar } from './services/cl4pLink';
 import { montarResumoRetroFin } from './services/cl4pSnapshot';
 
@@ -309,6 +311,10 @@ export default function App() {
   // O serviço nativo guarda as notificações dos bancos mesmo com o app fechado; aqui elas viram lançamentos.
   const accountsRef = useRef(accounts);
   accountsRef.current = accounts;
+  const transactionsRef = useRef(transactions);
+  transactionsRef.current = transactions;
+  const categoriesRef = useRef(categories);
+  categoriesRef.current = categories;
   const [ultimosLancadosPorNotificacao, setUltimosLancadosPorNotificacao] = useState(0);
 
   const processarNotificacoes = useCallback(async () => {
@@ -324,7 +330,7 @@ export default function App() {
     for (const n of itens) {
       const r = interpretar(n);
       if (r.ok) {
-        const txs = montarTransacoes(n, r, accountsRef.current);
+        const txs = montarTransacoes(n, r, accountsRef.current, lerNomeTitular());
         novos.push(...txs);
         registrarNoLog(n, { lancada: true, valor: r.amount, descricao: txs[0].description });
       } else registrarNoLog(n, { lancada: false, motivo: r.motivo });
@@ -337,6 +343,15 @@ export default function App() {
       setUltimosLancadosPorNotificacao(novos.length);
     }
     await leitor.confirmar(itens.map((i) => i.id));
+    // Memória das suas correções e IA para os lançamentos novos (sem bloquear a tela)
+    const paraCategorizar = novos.filter((t) => t.category !== 'transacao_interna');
+    if (paraCategorizar.length) {
+      void categorizarLancamentos(paraCategorizar, [...transactionsRef.current, ...novos], categoriesRef.current).then(({ updated }) => {
+        if (!updated.length) return;
+        const mapa = new Map(updated.map((t) => [t.id, t]));
+        setTransactions((prev) => prev.map((t) => (mapa.has(t.id) && !ehManual(t) ? mapa.get(t.id)! : t)));
+      });
+    }
   }, []);
 
   useEffect(() => {
@@ -524,18 +539,19 @@ export default function App() {
     setAiStatusMsg('Analisando seu padrão manual e replicando nas transações...');
 
     try {
-      // Find transactions that the user has already classified manually (or reviewed) in the database
-      // These act as high-priority few-shot training examples for Gemini
-      const manualExamples = transactions.filter(
-        (t) => t.category && t.category !== 'outros' && !t.isCategorizedByAI
-      );
-
-      const result = await categorizeTransactionsWithAI(monthTransactions, accounts, manualExamples);
-      const updatedMap = new Map(result.updated.map((t) => [t.id, t]));
-
+      // Só o que você não classificou à mão; memória e regras antes da IA.
+      const alvo = monthTransactions.filter((t) => !ehManual(t));
+      const { updated, resumo } = await categorizarLancamentos(alvo, transactions, categories);
+      const updatedMap = new Map(updated.map((t) => [t.id, t]));
       setTransactions((prev) => prev.map((t) => updatedMap.get(t.id) || t));
+      const partes = [
+        resumo.memoria && `${resumo.memoria} pela memória das suas correções`,
+        resumo.regras && `${resumo.regras} por regras`,
+        resumo.ia && `${resumo.ia} pela IA`,
+        resumo.semPista && `${resumo.semPista} sem pista`,
+      ].filter(Boolean);
       setAiStatusMsg(
-        `Classificação concluída: ${result.updated.length} transações atualizadas com seu padrão.`
+        `${partes.length ? partes.join(', ') : 'Nada para categorizar'}.${resumo.avisoIA ? ` ${resumo.avisoIA}` : ''} Lançamentos que você classificou não foram alterados.`
       );
 
       setTimeout(() => {
@@ -597,7 +613,22 @@ export default function App() {
 
   // Transaction Management Handlers
   const handleSaveTransaction = (updated: Transaction) => {
-    setTransactions((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+    setTransactions((prev) => {
+      const antes = prev.find((t) => t.id === updated.id);
+      const mudouCategoria = antes && (antes.category !== updated.category || (antes.subcategory || '') !== (updated.subcategory || ''));
+      if (!mudouCategoria) return prev.map((t) => (t.id === updated.id ? updated : t));
+      // Você corrigiu: vira referência (nunca mais sobrescrita) e vale para o mesmo estabelecimento
+      // nos lançamentos que ainda não foram classificados à mão.
+      const corrigido: Transaction = { ...updated, categorizedBy: 'usuario', isCategorizedByAI: false, aiReason: undefined, aiConfidence: undefined };
+      const chave = chaveEstabelecimento(updated.description);
+      return prev.map((t) => {
+        if (t.id === updated.id) return corrigido;
+        if (chave.length >= 3 && !ehManual(t) && chaveEstabelecimento(t.description) === chave) {
+          return { ...t, category: corrigido.category, subcategory: corrigido.subcategory, categorizedBy: 'memoria', isCategorizedByAI: true, aiConfidence: 0.99, aiReason: `Você classificou "${updated.description}" assim.` };
+        }
+        return t;
+      });
+    });
   };
 
   const handleDeleteTransaction = (id: string) => {

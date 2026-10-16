@@ -17,22 +17,21 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
-    // Assinatura: se o GitHub tiver os secrets RETROFIN_KEYSTORE_*, usa a chave deles; senão, a keystore
-    // versionada no repositório. Toda build sai com a mesma chave, então a versão nova instala por cima sem perder dados.
+    // Assinatura vinda do CI (GitHub Secrets → variáveis de ambiente). Build local sem elas usa a chave de debug.
+    def ksArquivo = System.getenv('ANDROID_KEYSTORE_FILE')
     signingConfigs {
-        rf {
-            storeFile file(System.getenv('RETROFIN_KEYSTORE_FILE') ?: 'retrofin.keystore')
-            storePassword System.getenv('RETROFIN_KEYSTORE_PASSWORD') ?: 'retrofin-apk'
-            keyAlias System.getenv('RETROFIN_KEY_ALIAS') ?: 'retrofin'
-            keyPassword System.getenv('RETROFIN_KEYSTORE_PASSWORD') ?: 'retrofin-apk'
+        if (ksArquivo) {
+            oficial {
+                storeFile file(ksArquivo)
+                storePassword System.getenv('ANDROID_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('ANDROID_KEY_ALIAS') ?: 'riizzi'
+                keyPassword System.getenv('ANDROID_KEYSTORE_PASSWORD')
+            }
         }
     }
     buildTypes {
-        debug {
-            signingConfig signingConfigs.rf
-        }
         release {
-            signingConfig signingConfigs.rf
+            if (ksArquivo) signingConfig signingConfigs.oficial
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
