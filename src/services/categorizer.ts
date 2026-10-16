@@ -1,5 +1,6 @@
 import { Transaction, BankAccount, AIInsight } from '../types';
 import { classifyTransactionLocally } from '../utils/ofxParser';
+import { apiUrl } from './apiBase';
 
 export async function categorizeTransactionsWithAI(
   transactions: Transaction[],
@@ -42,7 +43,7 @@ export async function categorizeTransactionsWithAI(
       };
     });
 
-    const response = await fetch('/api/categorize', {
+    const response = await fetch(apiUrl('/api/categorize'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ transactions: payload, manualExamples: examplesPayload }),
@@ -105,7 +106,7 @@ export async function fetchAIInsights(
   topExpenses: { category: string; amount: number }[]
 ): Promise<AIInsight[]> {
   try {
-    const res = await fetch('/api/ai-insights', {
+    const res = await fetch(apiUrl('/api/ai-insights'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ month, summary, topExpenses }),

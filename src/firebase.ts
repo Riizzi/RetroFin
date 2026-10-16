@@ -98,21 +98,30 @@ export async function syncAccountsToCloud(userId: string, accounts: BankAccount[
   }
 }
 
-// Sync user transactions with Firestore
+// Última versão de cada transação já gravada na nuvem. Evita regravar a lista inteira a cada
+// alteração (o plano gratuito do Firestore tem limite diário de gravações).
+const transacoesSincronizadas = new Map<string, string>();
+
+/** Marca transações vindas da nuvem como já sincronizadas. */
+export function marcarTransacoesSincronizadas(transactions: Transaction[]) {
+  for (const tx of transactions) transacoesSincronizadas.set(tx.id, JSON.stringify(tx));
+}
+
+// Sync user transactions with Firestore (só as novas ou alteradas)
 export async function syncTransactionsToCloud(userId: string, transactions: Transaction[]) {
   try {
+    const alteradas = transactions.filter((tx) => transacoesSincronizadas.get(tx.id) !== JSON.stringify(tx));
+    if (!alteradas.length) return;
     // Firestore batch supports up to 500 writes
-    const chunks: Transaction[][] = [];
-    for (let i = 0; i < transactions.length; i += 450) {
-      chunks.push(transactions.slice(i, i + 450));
-    }
-    for (const chunk of chunks) {
+    for (let i = 0; i < alteradas.length; i += 450) {
+      const chunk = alteradas.slice(i, i + 450);
       const batch = writeBatch(db);
       chunk.forEach((tx) => {
         const ref = doc(db, 'users', userId, 'transactions', tx.id);
         batch.set(ref, tx);
       });
       await batch.commit();
+      marcarTransacoesSincronizadas(chunk);
     }
   } catch (err) {
     console.warn('Sync transactions to cloud notice:', err);
