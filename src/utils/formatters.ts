@@ -116,3 +116,15 @@ export function formatTransactionTime(t: {
   }
   return null;
 }
+
+const MINUSCULAS = new Set(['de', 'da', 'do', 'das', 'dos', 'e', 'em', 'para', 'no', 'na']);
+/** "SUPERMERCADO BH LTDA" → "Supermercado Bh Ltda". Texto já com minúsculas fica como está. */
+export function descricaoLegivel(texto: string): string {
+  const t = (texto || '').trim();
+  if (!t || /[a-zà-ú]/.test(t)) return t;
+  return t
+    .toLowerCase()
+    .split(/\s+/)
+    .map((w, i) => (i > 0 && MINUSCULAS.has(w) ? w : w.charAt(0).toUpperCase() + w.slice(1)))
+    .join(' ');
+}

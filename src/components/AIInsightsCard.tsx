@@ -13,21 +13,40 @@ export const AIInsightsCard: React.FC<Props> = ({
   isLoading,
   onRefresh,
 }) => {
+  if (!isLoading && insights.length === 0) {
+    return (
+      <button
+        type="button"
+        onClick={onRefresh}
+        className="w-full p-3 rounded-2xl bg-[#FFFDF9] border border-[#E8DFD1] shadow-[2px_2px_0px_#E5DCD0] flex items-center gap-2.5 text-left active:translate-x-[1px] active:translate-y-[1px] active:shadow-none transition"
+      >
+        <div className="w-8 h-8 rounded-xl bg-[#FAF5ED] border border-[#F3E5D3] text-[#C68B59] flex items-center justify-center shrink-0">
+          <Sparkles className="w-4 h-4" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-bold text-[#292524]">Observações do mês</p>
+          <p className="text-[11px] text-[#78716C]">Toque para a IA analisar os lançamentos</p>
+        </div>
+        <RefreshCw className="w-4 h-4 text-[#78716C] shrink-0" />
+      </button>
+    );
+  }
+
   return (
-    <div className="p-5 sm:p-6 rounded-2xl bg-[#FFFDF9] border border-[#E8DFD1] shadow-[2px_2px_0px_#E5DCD0]">
-      <div className="flex items-center justify-between pb-4 border-b border-[#E8DFD1]">
+    <div className="p-4 sm:p-6 rounded-2xl bg-[#FFFDF9] border border-[#E8DFD1] shadow-[2px_2px_0px_#E5DCD0]">
+      <div className="flex items-center justify-between pb-3 border-b border-[#E8DFD1]">
         <div className="flex items-center gap-2.5">
           <div className="w-8 h-8 rounded-xl bg-[#FAF5ED] border border-[#F3E5D3] text-[#C68B59] flex items-center justify-center">
             <Sparkles className="w-4 h-4" />
           </div>
           <div>
             <h3 className="text-sm sm:text-base font-bold text-[#292524] flex items-center gap-2">
-              <span>Observações Financeiras</span>
+              <span>Observações do mês</span>
               <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#FAF5ED] text-[#C68B59] border border-[#F3E5D3] font-bold">
                 IA
               </span>
             </h3>
-            <p className="text-xs text-[#78716C]">Resumo com base nas movimentações e contas do mês</p>
+            <p className="hidden sm:block text-xs text-[#78716C]">Resumo com base nas movimentações e contas do mês</p>
           </div>
         </div>
 
@@ -47,7 +66,7 @@ export const AIInsightsCard: React.FC<Props> = ({
           <p className="text-xs font-mono text-[#78716C]">Analisando lançamentos do mês...</p>
         </div>
       ) : (
-        <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-2.5">
           {insights.map((item, idx) => {
             const icons = {
               positive: <TrendingUp className="w-4 h-4 text-[#386641] shrink-0 mt-0.5" />,
@@ -64,7 +83,7 @@ export const AIInsightsCard: React.FC<Props> = ({
             return (
               <div
                 key={idx}
-                className={`p-3.5 rounded-xl border ${styles[item.type]} flex flex-col justify-between space-y-2`}
+                className={`p-3 rounded-xl border ${styles[item.type]} flex flex-col justify-between space-y-2`}
               >
                 <div>
                   <div className="flex items-start gap-2">
