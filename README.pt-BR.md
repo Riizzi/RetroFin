@@ -19,9 +19,11 @@ Controle de finanças pessoais que lança os gastos sozinho: importa extratos, l
 
 ## Funcionalidades
 
-- **Lançamento automático por notificação**: um webhook recebe as notificações de compra e Pix do celular (via MacroDroid ou Tasker), extrai valor, estabelecimento e banco e cria a transação na conta certa
+- **Lançamento automático por notificação**: o app Android lê as notificações de compra e Pix dos apps de banco (Nubank, Inter, Itaú, C6 e outros) com um serviço nativo, extrai valor, estabelecimento e horário e cria a transação na conta certa, sem app de terceiros
+- **App Android (APK)** gerado pelo GitHub Actions a cada push, além da versão web/PWA
+- **Link com o CL4P-RZ**: envia um resumo dos lançamentos para o hub pessoal [CL4P-RZ](https://github.com/Riizzi/CL4P-RZ), que cruza gastos com lugares, despensa e lista de desejos
 - **Importação de extratos** em OFX, CSV ou texto copiado do app do banco
-- **Categorização com IA** (Gemini) em lote, aprendendo com exemplos corrigidos manualmente. Sem chave de API, um motor de regras local assume
+- **Categorização em camadas**: o que você classificou nunca é sobrescrito; uma correção sua vale para todos os lançamentos do mesmo estabelecimento; estabelecimentos conhecidos vão por regra; só o resto vai para o Gemini, com as suas categorias e exemplos, resposta presa à lista de categorias e sem nomes de pessoas
 - **Insights da IA** sobre os gastos do mês
 - **Orçamento por categoria** com metas mensais
 - **Gráficos** de gastos por categoria e por mês
@@ -40,23 +42,24 @@ Controle de finanças pessoais que lança os gastos sozinho: importa extratos, l
 | Login | Firebase Authentication (Google ou anônimo) |
 | IA | `@google/genai`, com saída em JSON estruturado |
 | PWA | `vite-plugin-pwa` (Workbox) |
+| Android | Capacitor 8 + `NotificationListenerService` em Java |
 
 ## Arquitetura
 
 ```
-Celular (MacroDroid / Tasker)
-   └── POST /api/notifications/webhook?userId=…
-             ├── extrai valor, banco e estabelecimento da notificação
-             ├── categoriza (regras locais)
-             └── grava em users/{uid}/transactions (Firebase Admin)
-
-App (PWA)
-   ├── Firestore ............. contas, transações e metas (sincronizado)
-   ├── POST /api/categorize .. categorização em lote com Gemini
-   └── POST /api/ai-insights . análise dos gastos do mês
+Android (Java)                                      App (React + Capacitor)
+ BankNotificationListener ── filtra apps de banco ─┐
+                             e textos com R$        ├─► NotifStore (fila) ──► bridge ──► bankNotifications.ts ──► transações
+ RetroFinNativePlugin ────── status, fila, ack ────┘                                    (valor, loja, Pix/cartão, espelho
+                                                                                          de transferência entre contas)
+App
+   ├── localStorage + Firestore ... contas, transações e metas (só grava o que mudou)
+   ├── POST /api/categorize ....... categorização em lote com Gemini (opcional)
+   ├── POST /api/ai-insights ...... análise dos gastos do mês (opcional)
+   └── Link CL4P-RZ ............... resumo para o hub pessoal
 ```
 
-As regras do Firestore (`firestore.rules`) só permitem que cada usuário leia e grave os próprios dados.
+A leitura das notificações acontece no aparelho. O serviço guarda as notificações numa fila mesmo com o app fechado; ao abrir, o app processa, lança e confirma. A lógica de interpretação é pura e tem testes (`tests/bankNotifications.test.ts`).
 
 ## Como rodar
 
@@ -77,17 +80,26 @@ Para usar seu próprio projeto Firebase, troque os valores de `firebase-applet-c
 | `start` | serve o build de produção |
 | `lint` | checagem de tipos com `tsc` |
 
-## Lançamentos automáticos com MacroDroid
+## App Android e leitura de notificações
 
-1. No app, abra a central de automação e copie a URL do webhook (ela já inclui o seu `userId`).
-2. No MacroDroid, crie uma macro com o gatilho **Notificação recebida** filtrando os apps dos bancos.
-3. Adicione a ação **Requisição HTTP**: método `POST`, corpo JSON com `app`, `title` e `text` da notificação.
+1. Abra a aba **Actions**: o workflow **Build APK** roda a cada push na `main` (ou manualmente).
+2. No celular, abra **Releases**, baixe **RetroFin.apk** e instale.
+3. No app: **Análises → Importar & Celular → Notificações → Liberar acesso** e ative o RetroFin.
+4. Se o Android mostrar *Configuração restrita* (padrão para apps instalados por APK no Android 13+): **Ajustes → Apps → RetroFin → ⋮ → Permitir configurações restritas** e repita o passo 3.
+5. Em **Bateria**, deixe o RetroFin como **Sem restrições**.
 
-Exemplo de corpo:
+A tela de notificações mostra as últimas lidas e o motivo quando uma é ignorada (propaganda, fatura, aviso de limite).
 
-```json
-{ "app": "Nubank", "title": "Compra aprovada", "text": "Você pagou R$ 38,50 em Padaria Bella Vista" }
-```
+Para levar os dados da versão web: **Backup e vínculos → Exportar** na web e **Restaurar** no APK.
+
+> **Assinatura do APK:** a chave fica só nos *Secrets* do GitHub (`ANDROID_KEYSTORE_BASE64` e `ANDROID_KEYSTORE_PASSWORD`), nunca no repositório. Sem eles, o workflow compila com uma chave temporária e não publica em Releases.
+
+## Privacidade e servidor
+
+- As rotas de webhook do MacroDroid foram removidas: elas gravavam no banco de qualquer usuário só com o id na URL.
+- Em servidor público, defina `RETROFIN_API_KEY` e cole o mesmo valor em **Backup e vínculos → Categorização**. Sem a chave, quem descobrir a URL consegue usar a sua cota do Gemini.
+- Para a IA vão só descrição do estabelecimento, valor, data e canal. Pix para pessoas vai como `Pix para [pessoa]`.
+- O Firestore só deixa cada usuário ler e gravar os próprios dados (`firestore.rules`).
 
 ## Licença
 

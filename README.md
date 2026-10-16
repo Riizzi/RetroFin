@@ -21,9 +21,11 @@ A personal finance tracker that logs spending on its own: it imports bank statem
 
 ## Features
 
-- **Automatic entries from notifications**: a webhook receives purchase and Pix notifications from your phone (via MacroDroid or Tasker), extracts amount, merchant and bank, and creates the transaction in the right account
+- **Automatic entries from notifications**: the Android app reads purchase and Pix notifications from bank apps (Nubank, Inter, Itaú, C6 and others) with a native service, extracts amount, merchant and time, and creates the transaction in the right account, with no third-party automation app
+- **Android app (APK)** built by GitHub Actions on every push, alongside the web/PWA version
+- **CL4P-RZ link**: sends a summary to the personal hub [CL4P-RZ](https://github.com/Riizzi/CL4P-RZ), which cross-references spending with places, pantry and wishlist
 - **Statement import** from OFX, CSV or text copied from the bank app
-- **AI categorization** (Gemini) in batches, learning from manually corrected examples. Without an API key, a local rule engine takes over
+- **Layered categorization**: your manual choices are never overwritten; a correction applies to every transaction from the same merchant; known merchants go through rules; only the rest goes to Gemini, with your categories and examples, a schema-restricted answer and no personal names
 - **AI insights** on the month's spending
 - **Category budgets** with monthly goals
 - **Charts** of spending by category and by month
@@ -42,23 +44,23 @@ A personal finance tracker that logs spending on its own: it imports bank statem
 | Auth | Firebase Authentication (Google or anonymous) |
 | AI | `@google/genai` with structured JSON output |
 | PWA | `vite-plugin-pwa` (Workbox) |
+| Android | Capacitor 8 + Java `NotificationListenerService` |
 
 ## Architecture
 
 ```
-Phone (MacroDroid / Tasker)
-   └── POST /api/notifications/webhook?userId=…
-             ├── extracts amount, bank and merchant from the notification
-             ├── categorizes it (local rules)
-             └── writes to users/{uid}/transactions (Firebase Admin)
-
-App (PWA)
-   ├── Firestore ............. accounts, transactions and goals (synced)
-   ├── POST /api/categorize .. batch categorization with Gemini
-   └── POST /api/ai-insights . monthly spending analysis
+Android (Java)                                      App (React + Capacitor)
+ BankNotificationListener ── bank apps only, ──────┐
+                             texts with R$          ├─► NotifStore (queue) ──► bridge ──► bankNotifications.ts ──► transactions
+ RetroFinNativePlugin ────── status, queue, ack ───┘
+App
+   ├── localStorage + Firestore ... accounts, transactions, budgets (writes only what changed)
+   ├── POST /api/categorize ....... batch categorization with Gemini (optional)
+   ├── POST /api/ai-insights ...... monthly spending analysis (optional)
+   └── CL4P-RZ link ............... summary for the personal hub
 ```
 
-Firestore security rules (`firestore.rules`) only let each user read and write their own data.
+Notification parsing runs on the device. The service queues notifications while the app is closed; when it opens, the app parses, records and acknowledges them. The parsing logic is pure and tested (`tests/bankNotifications.test.ts`).
 
 ## Getting started
 
@@ -79,17 +81,21 @@ To use your own Firebase project, replace the values in `firebase-applet-config.
 | `start` | serves the production build |
 | `lint` | type check with `tsc` |
 
-## Automatic entries with MacroDroid
+## Android app and notification reading
 
-1. In the app, open the automation hub and copy the webhook URL (it already includes your `userId`).
-2. In MacroDroid, create a macro with the **Notification received** trigger, filtered to your bank apps.
-3. Add an **HTTP Request** action: method `POST`, JSON body with the notification's `app`, `title` and `text`.
+1. In the **Actions** tab, the **Build APK** workflow runs on every push to `main`.
+2. On the phone, open **Releases**, download **RetroFin.apk** and install it.
+3. In the app: **Análises → Importar & Celular → Notificações → Liberar acesso**, then enable RetroFin.
+4. If Android shows *Restricted setting* (default for sideloaded apps on Android 13+): **Settings → Apps → RetroFin → ⋮ → Allow restricted settings**, then repeat step 3.
+5. Set battery usage to **Unrestricted**.
 
-Example body:
+> **APK signing:** the key lives only in GitHub Secrets (`ANDROID_KEYSTORE_BASE64` and `ANDROID_KEYSTORE_PASSWORD`), never in the repository. Without them, the workflow builds with a throwaway key and skips the release.
 
-```json
-{ "app": "Nubank", "title": "Compra aprovada", "text": "Você pagou R$ 38,50 em Padaria Bella Vista" }
-```
+## Privacy and server
+
+- The MacroDroid webhook routes were removed: they wrote into any user's database given just the id in the URL.
+- On a public server, set `RETROFIN_API_KEY` and paste the same value in **Backup e vínculos → Categorização**.
+- Only merchant description, amount, date and channel are sent to the AI. Pix to people is sent as `Pix para [pessoa]`.
 
 ## License
 

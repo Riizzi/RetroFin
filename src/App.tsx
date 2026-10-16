@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { App as CapApp } from '@capacitor/app';
 import { Transaction, Category, BankAccount, AIInsight } from './types';
 import { TransactionItem } from './components/TransactionItem';
 import { TransactionModal } from './components/TransactionModal';
@@ -21,7 +22,8 @@ import {
   lockAppSession,
   SecurityConfig,
 } from './utils/security';
-import { categorizeTransactionsWithAI, fetchAIInsights } from './services/categorizer';
+import { categorizarLancamentos, fetchAIInsights } from './services/categorizer';
+import { chaveEstabelecimento, ehManual } from './services/categorizacao';
 import { formatCurrencyBRL, formatMonthName, getTransactionTimestamp } from './utils/formatters';
 import { cleanTransactionDescription } from './utils/ofxParser';
 import {
@@ -44,6 +46,7 @@ import {
   signOutUser,
   syncAccountsToCloud,
   syncTransactionsToCloud,
+  marcarTransacoesSincronizadas,
   syncCategoriesToCloud,
   saveGlobalMonthlyBudget,
   getUserAccountsCollection,
@@ -58,6 +61,15 @@ import {
 import { onSnapshot, getDoc } from 'firebase/firestore';
 import { User } from 'firebase/auth';
 import { INITIAL_CATEGORIES } from './data/categories';
+import { ehNativo, leitor } from './native/retrofinNative';
+import { interpretar, montarTransacoes } from './services/bankNotifications';
+import { registrarNoLog } from './services/notifLog';
+import { lerNomeTitular } from './services/preferencias';
+import { cl4pCapturarDaUrl, cl4pCapturarDeepLink, cl4pPublicar } from './services/cl4pLink';
+import { montarResumoRetroFin } from './services/cl4pSnapshot';
+
+// Vínculo com o hub CL4P-RZ vindo pela URL (?cl4p=...)
+cl4pCapturarDaUrl();
 
 import {
   LayoutDashboard,
@@ -230,6 +242,7 @@ export default function App() {
               remoteTx.push(tx);
             });
             if (remoteTx.length > 0) {
+              if (!needsUpdate) marcarTransacoesSincronizadas(remoteTx);
               setTransactions(remoteTx);
               saveLocalTransactions(remoteTx);
               if (needsUpdate) {
@@ -293,6 +306,79 @@ export default function App() {
       saveGlobalMonthlyBudget(currentUser.uid, globalMonthlyBudget, selectedMonth);
     }
   }, [globalMonthlyBudget, currentUser, selectedMonth]);
+
+  // ------------------------------------------------------------------ leitor de notificações (APK)
+  // O serviço nativo guarda as notificações dos bancos mesmo com o app fechado; aqui elas viram lançamentos.
+  const accountsRef = useRef(accounts);
+  accountsRef.current = accounts;
+  const transactionsRef = useRef(transactions);
+  transactionsRef.current = transactions;
+  const categoriesRef = useRef(categories);
+  categoriesRef.current = categories;
+  const [ultimosLancadosPorNotificacao, setUltimosLancadosPorNotificacao] = useState(0);
+
+  const processarNotificacoes = useCallback(async () => {
+    if (!ehNativo) return;
+    let itens;
+    try {
+      itens = await leitor.puxar();
+    } catch {
+      return;
+    }
+    if (!itens.length) return;
+    const novos: Transaction[] = [];
+    for (const n of itens) {
+      const r = interpretar(n);
+      if (r.ok) {
+        const txs = montarTransacoes(n, r, accountsRef.current, lerNomeTitular());
+        novos.push(...txs);
+        registrarNoLog(n, { lancada: true, valor: r.amount, descricao: txs[0].description });
+      } else registrarNoLog(n, { lancada: false, motivo: r.motivo });
+    }
+    if (novos.length) {
+      setTransactions((prev) => {
+        const ids = new Set(prev.map((t) => t.id));
+        return [...novos.filter((t) => !ids.has(t.id)), ...prev];
+      });
+      setUltimosLancadosPorNotificacao(novos.length);
+    }
+    await leitor.confirmar(itens.map((i) => i.id));
+    // Memória das suas correções e IA para os lançamentos novos (sem bloquear a tela)
+    const paraCategorizar = novos.filter((t) => t.category !== 'transacao_interna');
+    if (paraCategorizar.length) {
+      void categorizarLancamentos(paraCategorizar, [...transactionsRef.current, ...novos], categoriesRef.current).then(({ updated }) => {
+        if (!updated.length) return;
+        const mapa = new Map(updated.map((t) => [t.id, t]));
+        setTransactions((prev) => prev.map((t) => (mapa.has(t.id) && !ehManual(t) ? mapa.get(t.id)! : t)));
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!ehNativo) return;
+    void processarNotificacoes();
+    const desligar = leitor.aoChegar(() => void processarNotificacoes());
+    const retomar = CapApp.addListener('resume', () => void processarNotificacoes());
+    // Deep link do hub: retrofin://cl4p?code=...
+    void CapApp.getLaunchUrl().then((r) => r?.url && cl4pCapturarDeepLink(r.url));
+    const link = CapApp.addListener('appUrlOpen', (e) => cl4pCapturarDeepLink(e.url));
+    return () => {
+      desligar();
+      void retomar.then((h) => h.remove());
+      void link.then((h) => h.remove());
+    };
+  }, [processarNotificacoes]);
+
+  useEffect(() => {
+    if (!ultimosLancadosPorNotificacao) return;
+    const t = setTimeout(() => setUltimosLancadosPorNotificacao(0), 4000);
+    return () => clearTimeout(t);
+  }, [ultimosLancadosPorNotificacao]);
+
+  // ------------------------------------------------------------------ hub CL4P-RZ
+  useEffect(() => {
+    cl4pPublicar('retrofin', () => montarResumoRetroFin(accounts, transactions, categories, globalMonthlyBudget));
+  }, [accounts, transactions, categories, globalMonthlyBudget]);
 
   // Account Filter ('ALL' or specific account id)
   const [selectedAccountFilter, setSelectedAccountFilter] = useState<'ALL' | string>('ALL');
@@ -453,18 +539,19 @@ export default function App() {
     setAiStatusMsg('Analisando seu padrão manual e replicando nas transações...');
 
     try {
-      // Find transactions that the user has already classified manually (or reviewed) in the database
-      // These act as high-priority few-shot training examples for Gemini
-      const manualExamples = transactions.filter(
-        (t) => t.category && t.category !== 'outros' && !t.isCategorizedByAI
-      );
-
-      const result = await categorizeTransactionsWithAI(monthTransactions, accounts, manualExamples);
-      const updatedMap = new Map(result.updated.map((t) => [t.id, t]));
-
+      // Só o que você não classificou à mão; memória e regras antes da IA.
+      const alvo = monthTransactions.filter((t) => !ehManual(t));
+      const { updated, resumo } = await categorizarLancamentos(alvo, transactions, categories);
+      const updatedMap = new Map(updated.map((t) => [t.id, t]));
       setTransactions((prev) => prev.map((t) => updatedMap.get(t.id) || t));
+      const partes = [
+        resumo.memoria && `${resumo.memoria} pela memória das suas correções`,
+        resumo.regras && `${resumo.regras} por regras`,
+        resumo.ia && `${resumo.ia} pela IA`,
+        resumo.semPista && `${resumo.semPista} sem pista`,
+      ].filter(Boolean);
       setAiStatusMsg(
-        `Classificação concluída: ${result.updated.length} transações atualizadas com seu padrão.`
+        `${partes.length ? partes.join(', ') : 'Nada para categorizar'}.${resumo.avisoIA ? ` ${resumo.avisoIA}` : ''} Lançamentos que você classificou não foram alterados.`
       );
 
       setTimeout(() => {
@@ -526,7 +613,22 @@ export default function App() {
 
   // Transaction Management Handlers
   const handleSaveTransaction = (updated: Transaction) => {
-    setTransactions((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+    setTransactions((prev) => {
+      const antes = prev.find((t) => t.id === updated.id);
+      const mudouCategoria = antes && (antes.category !== updated.category || (antes.subcategory || '') !== (updated.subcategory || ''));
+      if (!mudouCategoria) return prev.map((t) => (t.id === updated.id ? updated : t));
+      // Você corrigiu: vira referência (nunca mais sobrescrita) e vale para o mesmo estabelecimento
+      // nos lançamentos que ainda não foram classificados à mão.
+      const corrigido: Transaction = { ...updated, categorizedBy: 'usuario', isCategorizedByAI: false, aiReason: undefined, aiConfidence: undefined };
+      const chave = chaveEstabelecimento(updated.description);
+      return prev.map((t) => {
+        if (t.id === updated.id) return corrigido;
+        if (chave.length >= 3 && !ehManual(t) && chaveEstabelecimento(t.description) === chave) {
+          return { ...t, category: corrigido.category, subcategory: corrigido.subcategory, categorizedBy: 'memoria', isCategorizedByAI: true, aiConfidence: 0.99, aiReason: `Você classificou "${updated.description}" assim.` };
+        }
+        return t;
+      });
+    });
   };
 
   const handleDeleteTransaction = (id: string) => {
@@ -617,14 +719,20 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#FAF7F2] text-[#292524] flex flex-col pb-24 sm:pb-28">
-      {/* PWA Update Banner */}
-      <PWAUpdateNotification />
+      {/* PWA Update Banner (só na versão web; o APK atualiza pelo próprio APK) */}
+      {!ehNativo && <PWAUpdateNotification />}
+
+      {ultimosLancadosPorNotificacao > 0 && (
+        <div className="fixed top-3 left-1/2 -translate-x-1/2 z-[60] px-4 py-2.5 rounded-xl bg-[#292524] text-[#FAF7F2] text-xs font-mono font-bold shadow-[2px_2px_0px_#C68B59]" role="status">
+          {ultimosLancadosPorNotificacao} lançamento(s) pela notificação do banco
+        </div>
+      )}
 
       {/* Offline Toast */}
       <OfflineIndicator />
 
       {/* Top Header / Retro App Bar */}
-      <header className="sticky top-0 z-40 bg-[#FAF7F2]/95 backdrop-blur-md border-b border-[#E8DFD1] px-2 sm:px-8 py-1.5 sm:py-2.5">
+      <header className="sticky top-0 z-40 bg-[#FAF7F2]/95 backdrop-blur-md border-b border-[#E8DFD1] px-2 sm:px-8 py-1.5 sm:py-2.5 pt-[max(0.375rem,env(safe-area-inset-top))]">
         <div className="max-w-6xl mx-auto flex items-center justify-between gap-1.5 sm:gap-2">
           {/* Logo & Identity */}
           <div className="flex items-center gap-1.5 sm:gap-2.5 min-w-0 shrink-0">

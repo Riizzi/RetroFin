@@ -87,7 +87,7 @@ export const TransactionItem: React.FC<Props> = ({
                 className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded text-[9px] font-mono font-bold bg-[#FAF5ED] text-[#C68B59] border border-[#F3E5D3]"
               >
                 <Sparkles className="w-2.5 h-2.5 text-[#C68B59]" />
-                <span>IA</span>
+                <span>{transaction.categorizedBy === 'memoria' ? 'MEM' : transaction.categorizedBy === 'regras' ? 'AUTO' : 'IA'}</span>
               </span>
             )}
           </div>

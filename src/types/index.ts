@@ -56,6 +56,8 @@ export interface Transaction {
   account?: string; // alias for accountName
   accountPurpose?: string; // purpose for contextual AI analysis
   isCategorizedByAI: boolean;
+  /** quem definiu a categoria: você, a memória das suas correções, as regras ou a IA */
+  categorizedBy?: 'usuario' | 'memoria' | 'regras' | 'ia';
   aiConfidence?: number;
   aiReason?: string;
   notes?: string;

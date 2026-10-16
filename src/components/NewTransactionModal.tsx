@@ -73,12 +73,8 @@ export const NewTransactionModal: React.FC<Props> = ({
         status: 'liquidado',
       };
 
-      // Get high-quality manual classifications from the existing list
-      const manualExamples = allTransactions.filter(
-        (t) => t.category && t.category !== 'outros' && !t.isCategorizedByAI
-      );
-
-      const result = await categorizeTransactionsWithAI([tempTx], accounts, manualExamples);
+      // Memória das suas correções → regras → IA (services/categorizacao.ts)
+      const result = await categorizeTransactionsWithAI([tempTx], accounts, allTransactions, categories);
       if (result.updated && result.updated.length > 0) {
         const classified = result.updated[0];
         setCategory(classified.category);
@@ -131,6 +127,7 @@ export const NewTransactionModal: React.FC<Props> = ({
       account: accName,
       accountPurpose: selectedAccount?.purpose,
       isCategorizedByAI: false,
+      categorizedBy: 'usuario',
       status: 'liquidado',
     };
 
