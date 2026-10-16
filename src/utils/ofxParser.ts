@@ -1,4 +1,5 @@
 import { classificarPorRegras } from '../services/categorizacao';
+import { lerCsvExtrato, limparDescricaoExtrato } from './extrato';
 import { lerNomeTitular } from '../services/preferencias';
 import { Transaction, PaymentChannel, BankInstitution, BankAccount } from '../types';
 
@@ -201,13 +202,17 @@ export function parseBankOFX(
         if (rawDt.length >= 12) {
           const hh = rawDt.substring(8, 10);
           const mm = rawDt.substring(10, 12);
-          if (!isNaN(Number(hh)) && !isNaN(Number(mm))) {
+          // 00:00 é só a data (bancos preenchem assim); não vale como horário
+          if (!isNaN(Number(hh)) && !isNaN(Number(mm)) && `${hh}${mm}` !== '0000') {
             formattedTime = `${hh}:${mm}`;
           }
         }
       }
 
-      const description = (memoMatch ? memoMatch[1].trim() : '') || (nameMatch ? nameMatch[1].trim() : '') || 'Movimentação Bancária';
+      const memo = memoMatch ? memoMatch[1].trim() : '';
+      const nome = nameMatch ? nameMatch[1].trim() : '';
+      const bruta = memo && nome && !memo.toUpperCase().includes(nome.toUpperCase()) ? `${memo}: ${nome}` : memo || nome || 'Movimentação bancária';
+      const description = limparDescricaoExtrato(bruta);
       const type = rawAmt >= 0 ? 'credit' : 'debit';
       const classified = classifyTransactionLocally(description, type, targetAccount?.purpose);
 
@@ -238,104 +243,51 @@ export function parseBankOFX(
   return transactions;
 }
 
-// Parses CSV file from any bank (Nubank, Inter, Itaú, etc.)
+// Parses CSV file from any bank (Nubank conta e cartão, Inter, Itaú e genéricos) — ver utils/extrato.ts
 export function parseBankCSV(
   csvContent: string,
   targetAccount?: BankAccount
 ): Transaction[] {
-  const transactions: Transaction[] = [];
-  const lines = csvContent.split(/\r?\n/).filter(l => l.trim().length > 0);
-  if (lines.length < 2) return transactions;
-
-  const firstLine = lines[0];
-  const delimiter = firstLine.includes(';') ? ';' : ',';
-  const headers = firstLine.split(delimiter).map(h => h.trim().toLowerCase().replace(/["']/g, ''));
-
-  let detectedInstitution: BankInstitution = targetAccount?.institution || 'OUTRO';
-  if (firstLine.includes('title') && firstLine.includes('category') && firstLine.includes('amount')) {
-    detectedInstitution = 'NUBANK';
-  } else if (csvContent.toUpperCase().includes('NUBANK')) {
-    detectedInstitution = 'NUBANK';
-  } else if (csvContent.toUpperCase().includes('ITAU') || csvContent.toUpperCase().includes('ITAÚ')) {
-    detectedInstitution = 'ITAU';
-  } else if (csvContent.toUpperCase().includes('INTER')) {
-    detectedInstitution = 'BANCO_INTER';
-  }
-
-  let dateIdx = headers.findIndex(h => h.includes('date') || h.includes('data'));
-  let descIdx = headers.findIndex(h => h.includes('title') || h.includes('descri') || h.includes('hist') || h.includes('estabelecimento'));
-  let amtIdx = headers.findIndex(h => h.includes('amount') || h.includes('valor'));
-
-  if (dateIdx === -1) dateIdx = 0;
-  if (descIdx === -1) descIdx = 1;
-  if (amtIdx === -1) amtIdx = 2;
-
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
-
-    const cols = line.split(delimiter).map(c => c.trim().replace(/^["']|["']$/g, ''));
-    if (cols.length <= Math.max(dateIdx, descIdx, amtIdx)) continue;
-
-    const rawDate = cols[dateIdx];
-    const rawDesc = cols[descIdx];
-    const rawAmt = cols[amtIdx];
-
-    let amount = parseMonetaryValue(rawAmt);
-    if (isNaN(amount) || amount === 0) {
-      // Check if another column contains the amount if amtIdx was empty or 0
-      for (let c = 0; c < cols.length; c++) {
-        if (c !== dateIdx && c !== descIdx) {
-          const tryAmt = parseMonetaryValue(cols[c]);
-          if (tryAmt !== 0) {
-            amount = tryAmt;
-            break;
-          }
-        }
-      }
-    }
-    if (amount === 0 && !rawAmt.includes('0')) continue;
-
-    // In Nubank credit card CSVs (header 'title', 'category', 'amount'), purchases are listed as positive numbers; treat as debit
-    if (detectedInstitution === 'NUBANK' && headers.includes('title') && amount > 0) {
-      amount = -Math.abs(amount);
-    }
-
-    let formattedDate = rawDate;
-    if (rawDate.includes('/')) {
-      const parts = rawDate.split('/');
-      if (parts.length === 3) {
-        const d = parts[0].padStart(2, '0');
-        const m = parts[1].padStart(2, '0');
-        const y = parts[2].length === 2 ? `20${parts[2]}` : parts[2];
-        formattedDate = `${y}-${m}-${d}`;
-      }
-    }
-
-    const type = amount >= 0 ? 'credit' : 'debit';
-    const classified = classifyTransactionLocally(rawDesc, type, targetAccount?.purpose);
-    const inst = targetAccount?.institution || (detectedInstitution !== 'OUTRO' ? detectedInstitution : classified.institution);
-    const accId = targetAccount?.id || `acc-${inst.toLowerCase()}`;
-    const accName = targetAccount?.name || (inst === 'NUBANK' ? 'Nubank' : inst === 'BANCO_INTER' ? 'Banco Inter' : inst === 'ITAU' ? 'Itaú' : 'Conta Bancária');
-
-    transactions.push({
-      id: `csv-${Date.now()}-${i}-${Math.random().toString(36).substring(2, 6)}`,
-      date: formattedDate,
-      description: rawDesc || 'Transação Bancária',
-      amount,
+  const r = lerCsvExtrato(csvContent, targetAccount?.type === 'CARTAO_CREDITO' ? { cartao: true } : {});
+  const inst: BankInstitution = targetAccount?.institution || r.banco;
+  const accId = targetAccount?.id || `acc-${inst.toLowerCase()}`;
+  const accName = targetAccount?.name || (inst === 'NUBANK' ? 'Nubank' : inst === 'BANCO_INTER' ? 'Banco Inter' : inst === 'ITAU' ? 'Itaú' : 'Conta Bancária');
+  return r.linhas.map((l) => {
+    const type = l.amount >= 0 ? 'credit' : 'debit';
+    // Na fatura do cartão, crédito = pagamento da fatura (dinheiro que já saiu da conta)
+    const pagamentoFatura = r.cartao && type === 'credit' && /pagamento|recebido/i.test(l.descricaoOriginal);
+    const classified = classifyTransactionLocally(l.description, type, targetAccount?.purpose);
+    // id estável: reimportar o mesmo arquivo não duplica
+    const chave = l.idBanco || `${l.date}|${l.amount}|${l.descricaoOriginal}`;
+    return {
+      id: `csv-${inst.toLowerCase()}-${hashCurto(chave)}`,
+      date: l.date,
+      description: pagamentoFatura ? 'Pagamento de fatura' : l.description,
+      amount: l.amount,
       type,
-      category: classified.category,
-      subcategory: classified.subcategory,
-      channel: classified.channel,
+      category: pagamentoFatura ? 'transacao_interna' : classified.category,
+      subcategory: pagamentoFatura ? 'Pagamento de fatura' : classified.subcategory,
+      channel: r.cartao ? 'CARTAO_CREDITO' : classified.channel,
       accountId: accId,
       accountName: accName,
       bankInstitution: inst,
-      isCategorizedByAI: false,
+      isCategorizedByAI: true,
+      categorizedBy: 'regras',
+      notes: l.descricaoOriginal !== l.description ? `Extrato: ${l.descricaoOriginal}` : undefined,
       status: 'liquidado',
-    });
-  }
+    } as Transaction;
+  });
+}
 
-  return transactions;
+function hashCurto(s: string): string {
+  let h1 = 5381;
+  let h2 = 52711;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    h1 = ((h1 << 5) + h1 + c) | 0;
+    h2 = ((h2 << 5) + h2 + c * 31) | 0;
+  }
+  return `${(h1 >>> 0).toString(36)}${(h2 >>> 0).toString(36)}`;
 }
 
 // Parses raw copied notification or statement text from clipboard

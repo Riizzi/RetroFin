@@ -425,7 +425,7 @@ export const AnalyticsCharts: React.FC<Props> = ({
           </div>
 
           {/* Quick Metrics KPI Cards */}
-          <div className="grid grid-cols-1 min-col-size-[140px] min-[400px]:grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-4">
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-4">
             <div className="p-3 sm:p-4 rounded-xl sm:rounded-2xl bg-[#FFFDF9] border border-[#E8DFD1] shadow-[1px_1px_0px_#E5DCD0]">
               <span className="text-[9px] sm:text-[10px] font-mono uppercase tracking-wider text-[#78716C] font-bold block truncate">
                 Recebido ({multiMonthData.length}M)

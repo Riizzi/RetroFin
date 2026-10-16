@@ -24,6 +24,8 @@ import {
 } from './utils/security';
 import { categorizarLancamentos, fetchAIInsights } from './services/categorizer';
 import { chaveEstabelecimento, ehManual } from './services/categorizacao';
+import { separarRepetidos } from './services/duplicados';
+import { baixarAtualizacao, verificarSeFazUmDia, type InfoAtualizacao } from './services/atualizacao';
 import { formatCurrencyBRL, formatMonthName, getTransactionTimestamp } from './utils/formatters';
 import { cleanTransactionDescription } from './utils/ofxParser';
 import {
@@ -369,6 +371,12 @@ export default function App() {
     };
   }, [processarNotificacoes]);
 
+  // Aviso discreto de versão nova (verifica no máximo 1x por dia)
+  const [novaVersao, setNovaVersao] = useState<InfoAtualizacao | null>(null);
+  useEffect(() => {
+    void verificarSeFazUmDia('Riizzi/RetroFin', 'RetroFin.apk').then(setNovaVersao);
+  }, []);
+
   useEffect(() => {
     if (!ultimosLancadosPorNotificacao) return;
     const t = setTimeout(() => setUltimosLancadosPorNotificacao(0), 4000);
@@ -397,20 +405,7 @@ export default function App() {
   const [aiStatusMsg, setAiStatusMsg] = useState<string | null>(null);
 
   // Status and Insights
-  const [insights, setInsights] = useState<AIInsight[]>([
-    {
-      title: 'Classificação por Conta',
-      type: 'tip',
-      message: 'A categorização considera a finalidade informada em cada conta (ex: Casa & Mercado vs Pessoal).',
-      action: 'Ajuste o nome e finalidade das contas para refinar as classificações.',
-    },
-    {
-      title: 'Armazenamento Local',
-      type: 'positive',
-      message: 'Os registros são gravados na memória local deste navegador/dispositivo.',
-      action: 'Exporte backups periódicos em arquivo JSON.',
-    },
-  ]);
+  const [insights, setInsights] = useState<AIInsight[]>([]);
   const [isLoadingInsights, setIsLoadingInsights] = useState(false);
   const [isManualRefreshing, setIsManualRefreshing] = useState(false);
 
@@ -649,11 +644,19 @@ export default function App() {
 
   // Batch import transactions (from OFX, CSV, copied text)
   const handleImportTransactions = useCallback((imported: Transaction[]) => {
-    setTransactions((prev) => [...imported, ...prev]);
-    if (imported.length > 0 && imported[0].date) {
-      const newestMonth = imported[0].date.substring(0, 7);
-      setSelectedMonth(newestMonth);
+    const { novos, repetidos } = separarRepetidos(imported, transactionsRef.current);
+    if (novos.length) setTransactions((prev) => [...novos, ...prev]);
+    if (novos.length) {
+      const maisRecente = novos.reduce((m, t) => (t.date > m ? t.date : m), novos[0].date);
+      setSelectedMonth(maisRecente.substring(0, 7));
+      // Memória das suas correções e IA para o que as regras não resolveram (sem travar a tela)
+      void categorizarLancamentos(novos.filter((t) => t.category === 'outros'), [...transactionsRef.current, ...novos], categoriesRef.current).then(({ updated }) => {
+        if (!updated.length) return;
+        const mapa = new Map(updated.map((t) => [t.id, t]));
+        setTransactions((prev) => prev.map((t) => (mapa.has(t.id) && !ehManual(t) ? mapa.get(t.id)! : t)));
+      });
     }
+    if (repetidos) setAiStatusMsg(`${repetidos} lançamento(s) do extrato já existiam (mesmo valor e data) e não foram duplicados.`);
     setActiveTab('transactions');
   }, []);
 
@@ -721,6 +724,16 @@ export default function App() {
     <div className="min-h-screen bg-[#FAF7F2] text-[#292524] flex flex-col pb-24 sm:pb-28">
       {/* PWA Update Banner (só na versão web; o APK atualiza pelo próprio APK) */}
       {!ehNativo && <PWAUpdateNotification />}
+
+      {novaVersao && (
+        <div className="mx-3 mt-2 px-3 py-2.5 rounded-xl bg-[#FFFDF9] border border-[#E8DFD1] flex items-center justify-between gap-3 text-xs">
+          <span className="text-[#57534E]">Versão nova do RetroFin (build {novaVersao.ultima}).</span>
+          <span className="flex gap-2 shrink-0">
+            <button type="button" onClick={() => baixarAtualizacao(novaVersao)} className="font-bold text-[#292524] underline">Atualizar</button>
+            <button type="button" onClick={() => setNovaVersao(null)} className="text-[#78716C]" aria-label="Fechar aviso">✕</button>
+          </span>
+        </div>
+      )}
 
       {ultimosLancadosPorNotificacao > 0 && (
         <div className="fixed top-3 left-1/2 -translate-x-1/2 z-[60] px-4 py-2.5 rounded-xl bg-[#292524] text-[#FAF7F2] text-xs font-mono font-bold shadow-[2px_2px_0px_#C68B59]" role="status">
@@ -886,7 +899,7 @@ export default function App() {
           </div>
 
           {/* Bank Filter Pills & "+" Button */}
-          <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 sm:pb-0 w-full sm:w-auto no-scrollbar">
+          <div className={`${accounts.length > 0 ? 'hidden sm:flex' : 'flex'} items-center gap-1.5 overflow-x-auto pb-0.5 sm:pb-0 w-full sm:w-auto no-scrollbar`}>
             <span className="text-[11px] font-mono text-[#78716C] mr-0.5 shrink-0">Contas:</span>
 
             {/* If accounts exist, show "Todas as Contas" */}
@@ -961,8 +974,8 @@ export default function App() {
       {/* Main Content Container */}
       <main className="max-w-6xl mx-auto w-full px-3.5 sm:px-8 py-3.5 sm:py-6 space-y-4 sm:space-y-6 flex-1 pb-28 sm:pb-12">
         {/* Dynamic Account Balances Cards (Nubank, Inter, Itaú, etc.) */}
-        {accounts.length > 0 ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 sm:gap-3">
+        {(activeTab === 'dashboard' || activeTab === 'transactions') && (accounts.length > 0 ? (
+          <div className="flex gap-2 overflow-x-auto no-scrollbar snap-x scroll-px-3.5 -mx-3.5 px-3.5 pb-1 sm:mx-0 sm:px-0 sm:pb-0 sm:grid sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 sm:gap-3 sm:overflow-visible">
             {accounts.map((acc) => {
               const isSelected = selectedAccountFilter === acc.id;
               const currentBal = accountBalances.map[acc.id] ?? acc.balance;
@@ -973,7 +986,7 @@ export default function App() {
                   onClick={() =>
                     setSelectedAccountFilter(selectedAccountFilter === acc.id ? 'ALL' : acc.id)
                   }
-                  className={`p-3 sm:p-4 rounded-xl sm:rounded-2xl border transition cursor-pointer relative group ${
+                  className={`snap-start shrink-0 w-[46%] min-w-[150px] sm:w-auto sm:min-w-0 p-2.5 sm:p-4 rounded-xl sm:rounded-2xl border transition cursor-pointer relative group ${
                     isSelected
                       ? 'shadow-[2px_2px_0px_#292524] ring-1 ring-[#292524]'
                       : 'hover:border-[#D5CBBC] shadow-[1px_1px_0px_#E5DCD0]'
@@ -1008,11 +1021,11 @@ export default function App() {
                     </button>
                   </div>
 
-                  <div className="text-lg sm:text-2xl font-extrabold font-mono text-[#292524] mt-1 sm:mt-1.5">
+                  <div className="text-base sm:text-2xl font-extrabold font-mono text-[#292524] mt-0.5 sm:mt-1.5 truncate">
                     {hideBalances ? '••••••••' : formatCurrencyBRL(currentBal)}
                   </div>
 
-                  <p className="text-[10px] text-[#57534E] line-clamp-1 mt-0.5 sm:mt-1 font-mono">
+                  <p className="hidden sm:block text-[10px] text-[#57534E] line-clamp-1 mt-1 font-mono">
                     {acc.purpose || `${acc.institutionName} • ${acc.type}`}
                   </p>
                 </div>
@@ -1025,13 +1038,13 @@ export default function App() {
                 setEditingAccount(null);
                 setIsAccountModalOpen(true);
               }}
-              className="p-2.5 sm:p-4 rounded-xl sm:rounded-2xl border border-dashed border-[#D5CBBC] hover:border-[#292524] bg-[#FAF7F2] hover:bg-[#F2EBE1] transition cursor-pointer flex items-center sm:flex-col justify-center gap-2 text-center"
+              className="snap-start shrink-0 w-[30%] min-w-[96px] sm:w-auto sm:min-w-0 p-2.5 sm:p-4 rounded-xl sm:rounded-2xl border border-dashed border-[#D5CBBC] hover:border-[#292524] bg-[#FAF7F2] hover:bg-[#F2EBE1] transition cursor-pointer flex flex-col justify-center items-center gap-1.5 sm:gap-2 text-center"
             >
               <div className="w-6 h-6 sm:w-8 sm:h-8 rounded-full bg-[#292524] text-[#FAF7F2] flex items-center justify-center font-bold text-xs shrink-0">
                 <Plus className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
               </div>
-              <span className="text-xs font-mono font-bold text-[#292524]">
-                Adicionar Conta
+              <span className="text-[11px] sm:text-xs font-mono font-bold text-[#292524]">
+                Nova conta
               </span>
             </button>
           </div>
@@ -1073,7 +1086,7 @@ export default function App() {
               </button>
             </div>
           </div>
-        )}
+        ))}
 
         {/* Subtab Switcher when in Analytics or Automation views */}
         {(activeTab === 'analytics' || activeTab === 'automation') && (
@@ -1087,7 +1100,7 @@ export default function App() {
               }`}
             >
               <PieChart className="w-4 h-4" />
-              <span>Análises & Histórico</span>
+              <span>Análises</span>
             </button>
 
             <button
@@ -1099,7 +1112,7 @@ export default function App() {
               }`}
             >
               <Zap className="w-4 h-4" />
-              <span>Importar & Celular</span>
+              <span>Importar e celular</span>
             </button>
           </div>
         )}
@@ -1120,7 +1133,7 @@ export default function App() {
                       : formatCurrencyBRL(monthSummary.balance)}
                   </div>
                   <span className="text-xs text-[#78716C] block mt-0.5">
-                    Resultado líquido do mês (Receitas - Despesas)
+                    Receitas menos despesas
                   </span>
                 </div>
 
@@ -1168,7 +1181,7 @@ export default function App() {
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <h3 className="font-bold text-sm sm:text-base text-[#292524]">
-                  Lançamentos Recentes ({formatMonthName(selectedMonth)})
+                  Últimos lançamentos
                 </h3>
                 <button
                   onClick={() => setActiveTab('transactions')}
@@ -1225,7 +1238,7 @@ export default function App() {
                 />
               </div>
 
-              <div className="flex flex-wrap items-center gap-2 text-xs">
+              <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2 text-xs [&>select]:min-w-0 [&>select]:w-full sm:[&>select]:w-auto">
                 {/* Type Filter */}
                 <select
                   value={filterType}
@@ -1274,7 +1287,7 @@ export default function App() {
                   title="Alterar ordenação por data"
                 >
                   <ArrowUpDown className="w-3.5 h-3.5 text-[#78716C]" />
-                  <span>{dateSortOrder === 'desc' ? 'Data: Mais recente primeiro' : 'Data: Mais antiga primeiro'}</span>
+                  <span>{dateSortOrder === 'desc' ? 'Mais recentes' : 'Mais antigas'}</span>
                 </button>
 
                 {(searchQuery || filterCategory !== 'ALL' || filterType !== 'ALL' || filterChannel !== 'ALL') && (

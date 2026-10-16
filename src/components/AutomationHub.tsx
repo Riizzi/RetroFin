@@ -2,11 +2,14 @@ import React, { useState, useEffect } from 'react';
 import { Transaction, BankAccount, Category } from '../types';
 import { parseBankOFX, parseBankCSV, parseRawBankText } from '../utils/ofxParser';
 import { exportDatabaseToJSON, parseDatabaseBackup } from '../utils/localDatabase';
+import { decodificarArquivo } from '../utils/extrato';
 import { BankBadge } from './BankBadge';
 import { ConfirmationModal } from './ConfirmationModal';
 import { NotificationReaderPanel } from './NotificationReaderPanel';
 import Cl4pLinkCard from './Cl4pLinkCard';
 import { IaAjustesCard } from './IaAjustesCard';
+import AtualizacaoCard from './AtualizacaoCard';
+import { ehNativo } from '../native/retrofinNative';
 import {
   Smartphone,
   Zap,
@@ -84,7 +87,8 @@ export const AutomationHub: React.FC<Props> = ({
     Array.from(files).forEach((file) => {
       const reader = new FileReader();
       reader.onload = (event) => {
-        const content = event.target?.result as string;
+        // UTF-8 ou Windows-1252 (o Inter exporta assim): acentos certos nos dois casos
+        const content = decodificarArquivo(event.target?.result as ArrayBuffer);
         let parsed: Transaction[] = [];
 
         if (
@@ -128,13 +132,23 @@ export const AutomationHub: React.FC<Props> = ({
           } else {
             setStatusMsg({
               type: 'error',
-              text: 'Nenhuma movimentação bancária foi identificada nos arquivos enviados.',
+              text: 'Nenhuma movimentação foi identificada nos arquivos enviados.',
+              details: [
+                'Formatos aceitos: OFX de qualquer banco e CSV do Nubank (conta e fatura), Inter e Itaú.',
+                'No CSV, o arquivo precisa ter colunas de data e de valor.',
+              ],
             });
           }
         }
       };
-      reader.readAsText(file);
+      reader.onerror = () => {
+        filesProcessed++;
+        setStatusMsg({ type: 'error', text: `Não consegui ler o arquivo ${file.name}.` });
+      };
+      reader.readAsArrayBuffer(file);
     });
+    // Permite escolher o mesmo arquivo de novo depois de uma falha
+    e.target.value = '';
   };
 
   // Paste text handler
@@ -304,7 +318,7 @@ export const AutomationHub: React.FC<Props> = ({
               <select
                 value={selectedAccountId}
                 onChange={(e) => setSelectedAccountId(e.target.value)}
-                className="rounded-xl bg-[#FAF7F2] border border-[#E8DFD1] px-3 py-1.5 text-xs font-mono font-bold text-[#292524] focus:outline-none"
+                className="min-w-0 w-full sm:w-auto rounded-xl bg-[#FAF7F2] border border-[#E8DFD1] px-3 py-1.5 text-xs font-mono font-bold text-[#292524] focus:outline-none"
               >
                 <option value="AUTO_DETECT">🔍 Auto-detectar pelo arquivo</option>
                 {accounts.map((a) => (
@@ -350,10 +364,10 @@ export const AutomationHub: React.FC<Props> = ({
             <span className="mt-2 text-[10px] font-mono px-2 py-0.5 rounded bg-[#EDF5EF] text-[#386641] font-bold border border-[#CDDACF]">
               Processamento local no navegador
             </span>
+            {/* Sem filtro de tipo: no Android, .ofx não tem tipo registrado e o seletor deixava o arquivo cinza */}
             <input
               type="file"
               multiple
-              accept=".ofx,.csv,.txt"
               onChange={handleBatchFileUpload}
               className="hidden"
             />
@@ -462,7 +476,7 @@ export const AutomationHub: React.FC<Props> = ({
                 <span>Selecionar Arquivo .JSON</span>
                 <input
                   type="file"
-                  accept=".json"
+                  accept=".json,application/json,text/plain,application/octet-stream"
                   onChange={handleFileBackupRestore}
                   className="hidden"
                 />
@@ -497,6 +511,7 @@ export const AutomationHub: React.FC<Props> = ({
       )}
 
       {/* SUBTAB 3: INSTALAR NO CELULAR */}
+      {activeSubtab === 'mobile' && ehNativo && <AtualizacaoCard repo="Riizzi/RetroFin" apk="RetroFin.apk" />}
       {activeSubtab === 'mobile' && (
         <div className="p-4 sm:p-6 rounded-2xl bg-[#FFFDF9] border border-[#E8DFD1] shadow-[2px_2px_0px_#E5DCD0] space-y-4">
           <div>
